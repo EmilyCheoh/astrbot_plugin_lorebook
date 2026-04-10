@@ -64,9 +64,6 @@ class LorebookPlugin(Star):
             flags=re.DOTALL,
         )
 
-        # 最大注入条目数
-        self._max_entries = int(config.get("max_entries", 10))
-
         # 从配置加载条目
         self._entries: list[dict[str, Any]] = []
         self._load_entries()
@@ -161,9 +158,6 @@ class LorebookPlugin(Star):
                     break
 
         matched.sort(key=lambda e: e["priority"])
-
-        if self._max_entries > 0 and len(matched) > self._max_entries:
-            matched = matched[:self._max_entries]
 
         return matched
 

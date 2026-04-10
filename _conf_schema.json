@@ -22,17 +22,6 @@
         "type": "string",
         "default": "Additional-Info"
     },
-    "max_entries": {
-        "description": "最大注入条目数",
-        "hint": "每轮最多注入多少个匹配到的世界书条目。0 表示不限制。",
-        "type": "int",
-        "slider": {
-            "min": 0,
-            "max": 20,
-            "step": 1
-        },
-        "default": 10
-    },
     "entries": {
         "description": "世界书条目",
         "type": "template_list",
