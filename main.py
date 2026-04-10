@@ -350,11 +350,11 @@ class LorebookPlugin(Star):
             if not self._entries:
                 return
 
-            prompt = req.prompt or ""
-            if not prompt:
+            user_text = event.message_str or ""
+            if not user_text:
                 return
 
-            matched = self._match_entries(prompt)
+            matched = self._match_entries(user_text)
             if not matched:
                 return
 
