@@ -1,0 +1,83 @@
+{
+    "enabled": {
+        "description": "启用世界书",
+        "hint": "全局开关。关闭后世界书不进行任何匹配和注入。",
+        "type": "bool",
+        "default": true
+    },
+    "injection_position": {
+        "description": "注入位置",
+        "hint": "匹配到的世界书条目注入到 LLM 请求的位置。user_message_before: 用户消息前；user_message_after: 用户消息后；system_prompt: 追加到系统提示词。",
+        "type": "string",
+        "default": "user_message_after",
+        "options": [
+            "user_message_before",
+            "user_message_after",
+            "system_prompt"
+        ]
+    },
+    "tag_name": {
+        "description": "XML 标签名称",
+        "hint": "用于包裹注入内容的 XML 标签名称。不需要包含尖括号。仅允许字母、数字、连字符、下划线。",
+        "type": "string",
+        "default": "Additional-Info"
+    },
+    "max_entries": {
+        "description": "最大注入条目数",
+        "hint": "每轮最多注入多少个匹配到的世界书条目。0 表示不限制。",
+        "type": "int",
+        "slider": {
+            "min": 0,
+            "max": 20,
+            "step": 1
+        },
+        "default": 10
+    },
+    "entries": {
+        "description": "世界书条目",
+        "type": "template_list",
+        "hint": "世界书的核心配置区域。每个条目包含名称、关键词和注入内容。当用户消息匹配到条目的关键词时，对应内容会被注入到 LLM 请求中。",
+        "templates": {
+            "common": {
+                "name": "常用条目",
+                "items": {
+                    "name": {
+                        "description": "名称",
+                        "hint": "条目的唯一标识，用于日志和管理。",
+                        "type": "string",
+                        "default": ""
+                    },
+                    "enabled": {
+                        "description": "启用",
+                        "hint": "关闭后该条目不参与匹配。",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "priority": {
+                        "description": "优先级",
+                        "hint": "多个条目同时命中时的注入顺序，1 = 最高优先（最靠前），10 = 最低。",
+                        "type": "int",
+                        "slider": {
+                            "min": 1,
+                            "max": 10,
+                            "step": 1
+                        },
+                        "default": 5
+                    },
+                    "keywords": {
+                        "description": "正则触发",
+                        "hint": "当用户消息包含这些关键词或匹配正则表达式时触发条目。支持正则语法。任一匹配即触发。",
+                        "type": "list",
+                        "default": []
+                    },
+                    "content": {
+                        "description": "注入内容",
+                        "hint": "条目触发时注入到 LLM 请求中的内容。",
+                        "type": "text",
+                        "default": ""
+                    }
+                }
+            }
+        }
+    }
+}
