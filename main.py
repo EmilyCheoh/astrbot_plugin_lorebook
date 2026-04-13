@@ -4,7 +4,8 @@ Lorebook - 世界书插件
 基于正则关键词匹配的轻量世界书实现。每轮 LLM 请求前：
 1. 清理上一轮注入到对话历史中的世界书标签
 2. 扫描当前用户消息，对所有已启用条目做正则匹配
-3. 将命中的条目按 priority 升序排列，拼装后注入到指定位置
+3. 对命中条目做 RAG 去重：若条目内容已被 RAG 注入到 prompt 中则跳过
+4. 将剩余条目按 priority 升序排列，拼装后注入到指定位置
 
 条目通过 AstrBot 管理面板配置（template_list），支持动态添加/编辑/删除。
 
@@ -148,6 +149,11 @@ class LorebookPlugin(Star):
     # 匹配
     # -------------------------------------------------------------------
 
+    @staticmethod
+    def _normalize(text: str) -> str:
+        """将连续空白压缩为单个空格，用于去重比较。"""
+        return re.sub(r"\s+", " ", text).strip()
+
     def _match_entries(self, text: str) -> list[dict[str, Any]]:
         """扫描文本，返回所有关键词命中的条目，按 priority 升序排列。"""
         matched = []
@@ -160,6 +166,32 @@ class LorebookPlugin(Star):
         matched.sort(key=lambda e: e["priority"])
 
         return matched
+
+    def _dedup_against_rag(
+        self,
+        matched: list[dict[str, Any]],
+        prompt: str,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """过滤掉已被 RAG 注入到 prompt 中的条目。
+
+        Returns:
+            (kept, skipped) — 保留的条目列表和被跳过的条目列表。
+        """
+        if not prompt:
+            return matched, []
+
+        normalized_prompt = self._normalize(prompt)
+
+        kept: list[dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
+
+        for entry in matched:
+            if self._normalize(entry["content"]) in normalized_prompt:
+                skipped.append(entry)
+            else:
+                kept.append(entry)
+
+        return kept, skipped
 
     # -------------------------------------------------------------------
     # 格式化
@@ -358,10 +390,24 @@ class LorebookPlugin(Star):
             if not matched:
                 return
 
+            # 去重：跳过已被 RAG 注入的条目
+            matched, skipped = self._dedup_against_rag(matched, req.prompt or "")
+
+            session_id = event.unified_msg_origin or "unknown"
+
+            if skipped:
+                logger.info(
+                    f"[{session_id}] Lorebook [去重]: "
+                    f"跳过 {len(skipped)} 个已被 RAG 覆盖的条目: "
+                    f"{[e['name'] for e in skipped]}"
+                )
+
+            if not matched:
+                return
+
             injection = self._format_injection(matched)
             self._inject_text(req, injection)
 
-            session_id = event.unified_msg_origin or "unknown"
             names = [e["name"] for e in matched]
             logger.info(
                 f"[{session_id}] Lorebook [注入]: "
