@@ -199,11 +199,14 @@ class LorebookPlugin(Star):
 
     def _format_injection(self, entries: list[dict[str, Any]]) -> str:
         """将匹配到的条目拼装为 XML 标签包裹的注入内容。"""
-        sections = []
-        for i, entry in enumerate(entries, 1):
-            sections.append(f"#{i}\n{entry['content']}")
+        if len(entries) == 1:
+            body = entries[0]["content"]
+        else:
+            sections = []
+            for i, entry in enumerate(entries, 1):
+                sections.append(f"#{i}\n{entry['content']}")
+            body = "\n\n".join(sections)
 
-        body = "\n\n".join(sections)
         return f"{self._header}\n{body}\n{self._footer}\n"
 
     # -------------------------------------------------------------------
