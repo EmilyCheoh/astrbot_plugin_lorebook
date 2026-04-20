@@ -71,20 +71,25 @@ class LorebookPlugin(Star):
             if not isinstance(book, dict):
                 continue
 
-            enabled = bool(book.get("enabled", True))
+            # 读取 lorebook_info 对象
+            info = book.get("lorebook_info", {})
+            if not isinstance(info, dict):
+                info = {}
+
+            enabled = bool(info.get("enabled", True))
             if not enabled:
                 continue
 
-            book_name = str(book.get("book_name", "")).strip()
+            book_name = str(info.get("book_name", "")).strip()
             if not book_name:
                 book_name = f"lorebook_{bi}"
 
             # 注入位置
-            pos = str(book.get("injection_position", "user_message_after")).strip()
+            pos = str(info.get("injection_position", "user_message_after")).strip()
             position = pos if pos in VALID_POSITIONS else "user_message_after"
 
             # XML 标签名
-            tag_name = str(book.get("tag_name", "Additional-Info")).strip()
+            tag_name = str(info.get("tag_name", "Additional-Info")).strip()
             if not tag_name or not TAG_NAME_PATTERN.match(tag_name):
                 logger.warning(
                     f"Lorebook [{book_name}]: "
@@ -100,31 +105,33 @@ class LorebookPlugin(Star):
             )
 
             # 标签头部说明文本
-            header_text = str(book.get("header_text", "")).strip()
+            header_text = str(info.get("header_text", "")).strip()
 
             # 加载条目 (1 ~ MAX_ENTRIES)
             entries: list[dict[str, Any]] = []
             for i in range(1, MAX_ENTRIES + 1):
-                prefix = f"entry_{i}_"
+                entry_obj = book.get(f"entry_{i}", {})
+                if not isinstance(entry_obj, dict):
+                    continue
 
-                entry_enabled = bool(book.get(f"{prefix}enabled", True))
+                entry_enabled = bool(entry_obj.get("enabled", True))
                 if not entry_enabled:
                     continue
 
-                entry_name = str(book.get(f"{prefix}name", "")).strip()
+                entry_name = str(entry_obj.get("name", "")).strip()
                 if not entry_name:
                     continue
 
-                keywords_raw = book.get(f"{prefix}keywords", [])
+                keywords_raw = entry_obj.get("keywords", [])
                 if not isinstance(keywords_raw, list) or not keywords_raw:
                     continue
 
-                content = str(book.get(f"{prefix}content", ""))
+                content = str(entry_obj.get("content", ""))
                 content = content.replace("\\n", "\n").strip()
                 if not content:
                     continue
 
-                priority = int(book.get(f"{prefix}priority", 5))
+                priority = int(entry_obj.get("priority", 5))
 
                 # 预编译正则
                 compiled = []
