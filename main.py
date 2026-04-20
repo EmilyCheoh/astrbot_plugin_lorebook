@@ -68,11 +68,11 @@ class LorebookPlugin(Star):
 
     @staticmethod
     def _parse_regex(val: Any) -> list[str]:
-        """解析 regex 字段：支持 "|" 分隔的字符串或字符串数组。"""
+        """解析 regex 字段：支持字符串（整体作为单个 pattern）或字符串数组（每项为独立 pattern）。"""
         if isinstance(val, list):
             return [str(v).strip() for v in val if str(v).strip()]
-        if isinstance(val, str):
-            return [s.strip() for s in val.split("|") if s.strip()]
+        if isinstance(val, str) and val.strip():
+            return [val.strip()]
         return []
 
     def _load_lorebooks(self) -> None:
