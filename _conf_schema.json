@@ -1,56 +1,62 @@
 {
-    "enabled": {
-        "description": "启用世界书",
-        "hint": "全局开关。关闭后世界书不进行任何匹配和注入。",
-        "type": "bool",
-        "default": true
-    },
-    "injection_position": {
-        "description": "注入位置",
-        "hint": "匹配到的世界书条目注入到 LLM 请求的位置。user_message_before: 用户消息前；user_message_after: 用户消息后；system_prompt: 追加到系统提示词。",
-        "type": "string",
-        "default": "user_message_after",
-        "options": [
-            "user_message_before",
-            "user_message_after",
-            "system_prompt"
-        ]
-    },
-    "tag_name": {
-        "description": "XML 标签名称",
-        "hint": "用于包裹注入内容的 XML 标签名称。不需要包含尖括号。仅允许字母、数字、连字符、下划线。",
-        "type": "string",
-        "default": "Additional-Info"
-    },
-    "header_text": {
-        "description": "标签头部说明文本",
-        "hint": "注入内容开头的说明文字，紧跟在 XML 开标签之后、条目内容之前。留空则不添加。",
-        "type": "string",
-        "default": ""
-    },
-    "entries": {
-        "description": "世界书条目",
+    "lorebooks": {
+        "description": "世界书",
         "type": "template_list",
-        "hint": "世界书的核心配置区域。每个条目包含名称、关键词和注入内容。当用户消息匹配到条目的关键词时，对应内容会被注入到 LLM 请求中。",
+        "hint": "每本世界书包含独立的注入设置和最多 20 个条目。点击右侧「添加」创建新的世界书。",
         "templates": {
-            "common": {
-                "name": "常用条目",
+            "lorebook": {
+                "name": "新世界书",
                 "items": {
-                    "name": {
-                        "description": "名称",
-                        "hint": "条目的唯一标识，用于日志和管理。",
+                    "book_name": {
+                        "description": "世界书名称",
+                        "hint": "方便识别这本世界书的用途。",
                         "type": "string",
                         "default": ""
                     },
                     "enabled": {
-                        "description": "启用",
+                        "description": "启用世界书",
+                        "hint": "关闭后整本世界书不进行匹配和注入。",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "injection_position": {
+                        "description": "注入位置",
+                        "hint": "匹配到的条目注入到 LLM 请求的位置。user_message_before: 用户消息前；user_message_after: 用户消息后；system_prompt: 追加到系统提示词。",
+                        "type": "string",
+                        "default": "user_message_after",
+                        "options": [
+                            "user_message_before",
+                            "user_message_after",
+                            "system_prompt"
+                        ]
+                    },
+                    "tag_name": {
+                        "description": "XML 标签名称",
+                        "hint": "用于包裹注入内容的 XML 标签名称。不需要包含尖括号。仅允许字母、数字、连字符、下划线。",
+                        "type": "string",
+                        "default": "Additional-Info"
+                    },
+                    "header_text": {
+                        "description": "标签头部说明文本",
+                        "hint": "注入内容开头的说明文字，紧跟在 XML 开标签之后、条目内容之前。留空则不添加。",
+                        "type": "string",
+                        "default": ""
+                    },
+                    "entry_1_name": {
+                        "description": "条目 1 — 名称",
+                        "hint": "条目的唯一标识，用于日志。留空则跳过该条目。",
+                        "type": "string",
+                        "default": ""
+                    },
+                    "entry_1_enabled": {
+                        "description": "条目 1 — 启用",
                         "hint": "关闭后该条目不参与匹配。",
                         "type": "bool",
                         "default": true
                     },
-                    "priority": {
-                        "description": "优先级",
-                        "hint": "多个条目同时命中时的注入顺序，1 = 最高优先（最靠前），10 = 最低。",
+                    "entry_1_priority": {
+                        "description": "条目 1 — 优先级",
+                        "hint": "多个条目同时命中时的注入顺序，1 = 最高优先，10 = 最低。",
                         "type": "int",
                         "slider": {
                             "min": 1,
@@ -59,14 +65,679 @@
                         },
                         "default": 5
                     },
-                    "keywords": {
-                        "description": "正则触发",
-                        "hint": "当用户消息包含这些关键词或匹配正则表达式时触发条目。支持正则语法。任一匹配即触发。",
+                    "entry_1_keywords": {
+                        "description": "条目 1 — 正则触发",
+                        "hint": "当用户消息匹配时触发。支持正则语法。任一匹配即触发。",
                         "type": "list",
                         "default": []
                     },
-                    "content": {
-                        "description": "注入内容",
+                    "entry_1_content": {
+                        "description": "条目 1 — 注入内容",
+                        "hint": "条目触发时注入到 LLM 请求中的内容。",
+                        "type": "text",
+                        "default": ""
+                    },
+                    "entry_2_name": {
+                        "description": "条目 2 — 名称",
+                        "hint": "条目的唯一标识，用于日志。留空则跳过该条目。",
+                        "type": "string",
+                        "default": ""
+                    },
+                    "entry_2_enabled": {
+                        "description": "条目 2 — 启用",
+                        "hint": "关闭后该条目不参与匹配。",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "entry_2_priority": {
+                        "description": "条目 2 — 优先级",
+                        "hint": "多个条目同时命中时的注入顺序，1 = 最高优先，10 = 最低。",
+                        "type": "int",
+                        "slider": {
+                            "min": 1,
+                            "max": 10,
+                            "step": 1
+                        },
+                        "default": 5
+                    },
+                    "entry_2_keywords": {
+                        "description": "条目 2 — 正则触发",
+                        "hint": "当用户消息匹配时触发。支持正则语法。任一匹配即触发。",
+                        "type": "list",
+                        "default": []
+                    },
+                    "entry_2_content": {
+                        "description": "条目 2 — 注入内容",
+                        "hint": "条目触发时注入到 LLM 请求中的内容。",
+                        "type": "text",
+                        "default": ""
+                    },
+                    "entry_3_name": {
+                        "description": "条目 3 — 名称",
+                        "hint": "条目的唯一标识，用于日志。留空则跳过该条目。",
+                        "type": "string",
+                        "default": ""
+                    },
+                    "entry_3_enabled": {
+                        "description": "条目 3 — 启用",
+                        "hint": "关闭后该条目不参与匹配。",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "entry_3_priority": {
+                        "description": "条目 3 — 优先级",
+                        "hint": "多个条目同时命中时的注入顺序，1 = 最高优先，10 = 最低。",
+                        "type": "int",
+                        "slider": {
+                            "min": 1,
+                            "max": 10,
+                            "step": 1
+                        },
+                        "default": 5
+                    },
+                    "entry_3_keywords": {
+                        "description": "条目 3 — 正则触发",
+                        "hint": "当用户消息匹配时触发。支持正则语法。任一匹配即触发。",
+                        "type": "list",
+                        "default": []
+                    },
+                    "entry_3_content": {
+                        "description": "条目 3 — 注入内容",
+                        "hint": "条目触发时注入到 LLM 请求中的内容。",
+                        "type": "text",
+                        "default": ""
+                    },
+                    "entry_4_name": {
+                        "description": "条目 4 — 名称",
+                        "hint": "条目的唯一标识，用于日志。留空则跳过该条目。",
+                        "type": "string",
+                        "default": ""
+                    },
+                    "entry_4_enabled": {
+                        "description": "条目 4 — 启用",
+                        "hint": "关闭后该条目不参与匹配。",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "entry_4_priority": {
+                        "description": "条目 4 — 优先级",
+                        "hint": "多个条目同时命中时的注入顺序，1 = 最高优先，10 = 最低。",
+                        "type": "int",
+                        "slider": {
+                            "min": 1,
+                            "max": 10,
+                            "step": 1
+                        },
+                        "default": 5
+                    },
+                    "entry_4_keywords": {
+                        "description": "条目 4 — 正则触发",
+                        "hint": "当用户消息匹配时触发。支持正则语法。任一匹配即触发。",
+                        "type": "list",
+                        "default": []
+                    },
+                    "entry_4_content": {
+                        "description": "条目 4 — 注入内容",
+                        "hint": "条目触发时注入到 LLM 请求中的内容。",
+                        "type": "text",
+                        "default": ""
+                    },
+                    "entry_5_name": {
+                        "description": "条目 5 — 名称",
+                        "hint": "条目的唯一标识，用于日志。留空则跳过该条目。",
+                        "type": "string",
+                        "default": ""
+                    },
+                    "entry_5_enabled": {
+                        "description": "条目 5 — 启用",
+                        "hint": "关闭后该条目不参与匹配。",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "entry_5_priority": {
+                        "description": "条目 5 — 优先级",
+                        "hint": "多个条目同时命中时的注入顺序，1 = 最高优先，10 = 最低。",
+                        "type": "int",
+                        "slider": {
+                            "min": 1,
+                            "max": 10,
+                            "step": 1
+                        },
+                        "default": 5
+                    },
+                    "entry_5_keywords": {
+                        "description": "条目 5 — 正则触发",
+                        "hint": "当用户消息匹配时触发。支持正则语法。任一匹配即触发。",
+                        "type": "list",
+                        "default": []
+                    },
+                    "entry_5_content": {
+                        "description": "条目 5 — 注入内容",
+                        "hint": "条目触发时注入到 LLM 请求中的内容。",
+                        "type": "text",
+                        "default": ""
+                    },
+                    "entry_6_name": {
+                        "description": "条目 6 — 名称",
+                        "hint": "条目的唯一标识，用于日志。留空则跳过该条目。",
+                        "type": "string",
+                        "default": ""
+                    },
+                    "entry_6_enabled": {
+                        "description": "条目 6 — 启用",
+                        "hint": "关闭后该条目不参与匹配。",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "entry_6_priority": {
+                        "description": "条目 6 — 优先级",
+                        "hint": "多个条目同时命中时的注入顺序，1 = 最高优先，10 = 最低。",
+                        "type": "int",
+                        "slider": {
+                            "min": 1,
+                            "max": 10,
+                            "step": 1
+                        },
+                        "default": 5
+                    },
+                    "entry_6_keywords": {
+                        "description": "条目 6 — 正则触发",
+                        "hint": "当用户消息匹配时触发。支持正则语法。任一匹配即触发。",
+                        "type": "list",
+                        "default": []
+                    },
+                    "entry_6_content": {
+                        "description": "条目 6 — 注入内容",
+                        "hint": "条目触发时注入到 LLM 请求中的内容。",
+                        "type": "text",
+                        "default": ""
+                    },
+                    "entry_7_name": {
+                        "description": "条目 7 — 名称",
+                        "hint": "条目的唯一标识，用于日志。留空则跳过该条目。",
+                        "type": "string",
+                        "default": ""
+                    },
+                    "entry_7_enabled": {
+                        "description": "条目 7 — 启用",
+                        "hint": "关闭后该条目不参与匹配。",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "entry_7_priority": {
+                        "description": "条目 7 — 优先级",
+                        "hint": "多个条目同时命中时的注入顺序，1 = 最高优先，10 = 最低。",
+                        "type": "int",
+                        "slider": {
+                            "min": 1,
+                            "max": 10,
+                            "step": 1
+                        },
+                        "default": 5
+                    },
+                    "entry_7_keywords": {
+                        "description": "条目 7 — 正则触发",
+                        "hint": "当用户消息匹配时触发。支持正则语法。任一匹配即触发。",
+                        "type": "list",
+                        "default": []
+                    },
+                    "entry_7_content": {
+                        "description": "条目 7 — 注入内容",
+                        "hint": "条目触发时注入到 LLM 请求中的内容。",
+                        "type": "text",
+                        "default": ""
+                    },
+                    "entry_8_name": {
+                        "description": "条目 8 — 名称",
+                        "hint": "条目的唯一标识，用于日志。留空则跳过该条目。",
+                        "type": "string",
+                        "default": ""
+                    },
+                    "entry_8_enabled": {
+                        "description": "条目 8 — 启用",
+                        "hint": "关闭后该条目不参与匹配。",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "entry_8_priority": {
+                        "description": "条目 8 — 优先级",
+                        "hint": "多个条目同时命中时的注入顺序，1 = 最高优先，10 = 最低。",
+                        "type": "int",
+                        "slider": {
+                            "min": 1,
+                            "max": 10,
+                            "step": 1
+                        },
+                        "default": 5
+                    },
+                    "entry_8_keywords": {
+                        "description": "条目 8 — 正则触发",
+                        "hint": "当用户消息匹配时触发。支持正则语法。任一匹配即触发。",
+                        "type": "list",
+                        "default": []
+                    },
+                    "entry_8_content": {
+                        "description": "条目 8 — 注入内容",
+                        "hint": "条目触发时注入到 LLM 请求中的内容。",
+                        "type": "text",
+                        "default": ""
+                    },
+                    "entry_9_name": {
+                        "description": "条目 9 — 名称",
+                        "hint": "条目的唯一标识，用于日志。留空则跳过该条目。",
+                        "type": "string",
+                        "default": ""
+                    },
+                    "entry_9_enabled": {
+                        "description": "条目 9 — 启用",
+                        "hint": "关闭后该条目不参与匹配。",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "entry_9_priority": {
+                        "description": "条目 9 — 优先级",
+                        "hint": "多个条目同时命中时的注入顺序，1 = 最高优先，10 = 最低。",
+                        "type": "int",
+                        "slider": {
+                            "min": 1,
+                            "max": 10,
+                            "step": 1
+                        },
+                        "default": 5
+                    },
+                    "entry_9_keywords": {
+                        "description": "条目 9 — 正则触发",
+                        "hint": "当用户消息匹配时触发。支持正则语法。任一匹配即触发。",
+                        "type": "list",
+                        "default": []
+                    },
+                    "entry_9_content": {
+                        "description": "条目 9 — 注入内容",
+                        "hint": "条目触发时注入到 LLM 请求中的内容。",
+                        "type": "text",
+                        "default": ""
+                    },
+                    "entry_10_name": {
+                        "description": "条目 10 — 名称",
+                        "hint": "条目的唯一标识，用于日志。留空则跳过该条目。",
+                        "type": "string",
+                        "default": ""
+                    },
+                    "entry_10_enabled": {
+                        "description": "条目 10 — 启用",
+                        "hint": "关闭后该条目不参与匹配。",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "entry_10_priority": {
+                        "description": "条目 10 — 优先级",
+                        "hint": "多个条目同时命中时的注入顺序，1 = 最高优先，10 = 最低。",
+                        "type": "int",
+                        "slider": {
+                            "min": 1,
+                            "max": 10,
+                            "step": 1
+                        },
+                        "default": 5
+                    },
+                    "entry_10_keywords": {
+                        "description": "条目 10 — 正则触发",
+                        "hint": "当用户消息匹配时触发。支持正则语法。任一匹配即触发。",
+                        "type": "list",
+                        "default": []
+                    },
+                    "entry_10_content": {
+                        "description": "条目 10 — 注入内容",
+                        "hint": "条目触发时注入到 LLM 请求中的内容。",
+                        "type": "text",
+                        "default": ""
+                    },
+                    "entry_11_name": {
+                        "description": "条目 11 — 名称",
+                        "hint": "条目的唯一标识，用于日志。留空则跳过该条目。",
+                        "type": "string",
+                        "default": ""
+                    },
+                    "entry_11_enabled": {
+                        "description": "条目 11 — 启用",
+                        "hint": "关闭后该条目不参与匹配。",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "entry_11_priority": {
+                        "description": "条目 11 — 优先级",
+                        "hint": "多个条目同时命中时的注入顺序，1 = 最高优先，10 = 最低。",
+                        "type": "int",
+                        "slider": {
+                            "min": 1,
+                            "max": 10,
+                            "step": 1
+                        },
+                        "default": 5
+                    },
+                    "entry_11_keywords": {
+                        "description": "条目 11 — 正则触发",
+                        "hint": "当用户消息匹配时触发。支持正则语法。任一匹配即触发。",
+                        "type": "list",
+                        "default": []
+                    },
+                    "entry_11_content": {
+                        "description": "条目 11 — 注入内容",
+                        "hint": "条目触发时注入到 LLM 请求中的内容。",
+                        "type": "text",
+                        "default": ""
+                    },
+                    "entry_12_name": {
+                        "description": "条目 12 — 名称",
+                        "hint": "条目的唯一标识，用于日志。留空则跳过该条目。",
+                        "type": "string",
+                        "default": ""
+                    },
+                    "entry_12_enabled": {
+                        "description": "条目 12 — 启用",
+                        "hint": "关闭后该条目不参与匹配。",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "entry_12_priority": {
+                        "description": "条目 12 — 优先级",
+                        "hint": "多个条目同时命中时的注入顺序，1 = 最高优先，10 = 最低。",
+                        "type": "int",
+                        "slider": {
+                            "min": 1,
+                            "max": 10,
+                            "step": 1
+                        },
+                        "default": 5
+                    },
+                    "entry_12_keywords": {
+                        "description": "条目 12 — 正则触发",
+                        "hint": "当用户消息匹配时触发。支持正则语法。任一匹配即触发。",
+                        "type": "list",
+                        "default": []
+                    },
+                    "entry_12_content": {
+                        "description": "条目 12 — 注入内容",
+                        "hint": "条目触发时注入到 LLM 请求中的内容。",
+                        "type": "text",
+                        "default": ""
+                    },
+                    "entry_13_name": {
+                        "description": "条目 13 — 名称",
+                        "hint": "条目的唯一标识，用于日志。留空则跳过该条目。",
+                        "type": "string",
+                        "default": ""
+                    },
+                    "entry_13_enabled": {
+                        "description": "条目 13 — 启用",
+                        "hint": "关闭后该条目不参与匹配。",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "entry_13_priority": {
+                        "description": "条目 13 — 优先级",
+                        "hint": "多个条目同时命中时的注入顺序，1 = 最高优先，10 = 最低。",
+                        "type": "int",
+                        "slider": {
+                            "min": 1,
+                            "max": 10,
+                            "step": 1
+                        },
+                        "default": 5
+                    },
+                    "entry_13_keywords": {
+                        "description": "条目 13 — 正则触发",
+                        "hint": "当用户消息匹配时触发。支持正则语法。任一匹配即触发。",
+                        "type": "list",
+                        "default": []
+                    },
+                    "entry_13_content": {
+                        "description": "条目 13 — 注入内容",
+                        "hint": "条目触发时注入到 LLM 请求中的内容。",
+                        "type": "text",
+                        "default": ""
+                    },
+                    "entry_14_name": {
+                        "description": "条目 14 — 名称",
+                        "hint": "条目的唯一标识，用于日志。留空则跳过该条目。",
+                        "type": "string",
+                        "default": ""
+                    },
+                    "entry_14_enabled": {
+                        "description": "条目 14 — 启用",
+                        "hint": "关闭后该条目不参与匹配。",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "entry_14_priority": {
+                        "description": "条目 14 — 优先级",
+                        "hint": "多个条目同时命中时的注入顺序，1 = 最高优先，10 = 最低。",
+                        "type": "int",
+                        "slider": {
+                            "min": 1,
+                            "max": 10,
+                            "step": 1
+                        },
+                        "default": 5
+                    },
+                    "entry_14_keywords": {
+                        "description": "条目 14 — 正则触发",
+                        "hint": "当用户消息匹配时触发。支持正则语法。任一匹配即触发。",
+                        "type": "list",
+                        "default": []
+                    },
+                    "entry_14_content": {
+                        "description": "条目 14 — 注入内容",
+                        "hint": "条目触发时注入到 LLM 请求中的内容。",
+                        "type": "text",
+                        "default": ""
+                    },
+                    "entry_15_name": {
+                        "description": "条目 15 — 名称",
+                        "hint": "条目的唯一标识，用于日志。留空则跳过该条目。",
+                        "type": "string",
+                        "default": ""
+                    },
+                    "entry_15_enabled": {
+                        "description": "条目 15 — 启用",
+                        "hint": "关闭后该条目不参与匹配。",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "entry_15_priority": {
+                        "description": "条目 15 — 优先级",
+                        "hint": "多个条目同时命中时的注入顺序，1 = 最高优先，10 = 最低。",
+                        "type": "int",
+                        "slider": {
+                            "min": 1,
+                            "max": 10,
+                            "step": 1
+                        },
+                        "default": 5
+                    },
+                    "entry_15_keywords": {
+                        "description": "条目 15 — 正则触发",
+                        "hint": "当用户消息匹配时触发。支持正则语法。任一匹配即触发。",
+                        "type": "list",
+                        "default": []
+                    },
+                    "entry_15_content": {
+                        "description": "条目 15 — 注入内容",
+                        "hint": "条目触发时注入到 LLM 请求中的内容。",
+                        "type": "text",
+                        "default": ""
+                    },
+                    "entry_16_name": {
+                        "description": "条目 16 — 名称",
+                        "hint": "条目的唯一标识，用于日志。留空则跳过该条目。",
+                        "type": "string",
+                        "default": ""
+                    },
+                    "entry_16_enabled": {
+                        "description": "条目 16 — 启用",
+                        "hint": "关闭后该条目不参与匹配。",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "entry_16_priority": {
+                        "description": "条目 16 — 优先级",
+                        "hint": "多个条目同时命中时的注入顺序，1 = 最高优先，10 = 最低。",
+                        "type": "int",
+                        "slider": {
+                            "min": 1,
+                            "max": 10,
+                            "step": 1
+                        },
+                        "default": 5
+                    },
+                    "entry_16_keywords": {
+                        "description": "条目 16 — 正则触发",
+                        "hint": "当用户消息匹配时触发。支持正则语法。任一匹配即触发。",
+                        "type": "list",
+                        "default": []
+                    },
+                    "entry_16_content": {
+                        "description": "条目 16 — 注入内容",
+                        "hint": "条目触发时注入到 LLM 请求中的内容。",
+                        "type": "text",
+                        "default": ""
+                    },
+                    "entry_17_name": {
+                        "description": "条目 17 — 名称",
+                        "hint": "条目的唯一标识，用于日志。留空则跳过该条目。",
+                        "type": "string",
+                        "default": ""
+                    },
+                    "entry_17_enabled": {
+                        "description": "条目 17 — 启用",
+                        "hint": "关闭后该条目不参与匹配。",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "entry_17_priority": {
+                        "description": "条目 17 — 优先级",
+                        "hint": "多个条目同时命中时的注入顺序，1 = 最高优先，10 = 最低。",
+                        "type": "int",
+                        "slider": {
+                            "min": 1,
+                            "max": 10,
+                            "step": 1
+                        },
+                        "default": 5
+                    },
+                    "entry_17_keywords": {
+                        "description": "条目 17 — 正则触发",
+                        "hint": "当用户消息匹配时触发。支持正则语法。任一匹配即触发。",
+                        "type": "list",
+                        "default": []
+                    },
+                    "entry_17_content": {
+                        "description": "条目 17 — 注入内容",
+                        "hint": "条目触发时注入到 LLM 请求中的内容。",
+                        "type": "text",
+                        "default": ""
+                    },
+                    "entry_18_name": {
+                        "description": "条目 18 — 名称",
+                        "hint": "条目的唯一标识，用于日志。留空则跳过该条目。",
+                        "type": "string",
+                        "default": ""
+                    },
+                    "entry_18_enabled": {
+                        "description": "条目 18 — 启用",
+                        "hint": "关闭后该条目不参与匹配。",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "entry_18_priority": {
+                        "description": "条目 18 — 优先级",
+                        "hint": "多个条目同时命中时的注入顺序，1 = 最高优先，10 = 最低。",
+                        "type": "int",
+                        "slider": {
+                            "min": 1,
+                            "max": 10,
+                            "step": 1
+                        },
+                        "default": 5
+                    },
+                    "entry_18_keywords": {
+                        "description": "条目 18 — 正则触发",
+                        "hint": "当用户消息匹配时触发。支持正则语法。任一匹配即触发。",
+                        "type": "list",
+                        "default": []
+                    },
+                    "entry_18_content": {
+                        "description": "条目 18 — 注入内容",
+                        "hint": "条目触发时注入到 LLM 请求中的内容。",
+                        "type": "text",
+                        "default": ""
+                    },
+                    "entry_19_name": {
+                        "description": "条目 19 — 名称",
+                        "hint": "条目的唯一标识，用于日志。留空则跳过该条目。",
+                        "type": "string",
+                        "default": ""
+                    },
+                    "entry_19_enabled": {
+                        "description": "条目 19 — 启用",
+                        "hint": "关闭后该条目不参与匹配。",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "entry_19_priority": {
+                        "description": "条目 19 — 优先级",
+                        "hint": "多个条目同时命中时的注入顺序，1 = 最高优先，10 = 最低。",
+                        "type": "int",
+                        "slider": {
+                            "min": 1,
+                            "max": 10,
+                            "step": 1
+                        },
+                        "default": 5
+                    },
+                    "entry_19_keywords": {
+                        "description": "条目 19 — 正则触发",
+                        "hint": "当用户消息匹配时触发。支持正则语法。任一匹配即触发。",
+                        "type": "list",
+                        "default": []
+                    },
+                    "entry_19_content": {
+                        "description": "条目 19 — 注入内容",
+                        "hint": "条目触发时注入到 LLM 请求中的内容。",
+                        "type": "text",
+                        "default": ""
+                    },
+                    "entry_20_name": {
+                        "description": "条目 20 — 名称",
+                        "hint": "条目的唯一标识，用于日志。留空则跳过该条目。",
+                        "type": "string",
+                        "default": ""
+                    },
+                    "entry_20_enabled": {
+                        "description": "条目 20 — 启用",
+                        "hint": "关闭后该条目不参与匹配。",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "entry_20_priority": {
+                        "description": "条目 20 — 优先级",
+                        "hint": "多个条目同时命中时的注入顺序，1 = 最高优先，10 = 最低。",
+                        "type": "int",
+                        "slider": {
+                            "min": 1,
+                            "max": 10,
+                            "step": 1
+                        },
+                        "default": 5
+                    },
+                    "entry_20_keywords": {
+                        "description": "条目 20 — 正则触发",
+                        "hint": "当用户消息匹配时触发。支持正则语法。任一匹配即触发。",
+                        "type": "list",
+                        "default": []
+                    },
+                    "entry_20_content": {
+                        "description": "条目 20 — 注入内容",
                         "hint": "条目触发时注入到 LLM 请求中的内容。",
                         "type": "text",
                         "default": ""
