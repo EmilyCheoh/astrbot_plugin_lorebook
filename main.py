@@ -18,6 +18,7 @@ Lorebook - 世界书插件
 F(A) = A(F)
 """
 
+import json
 import re
 from typing import Any
 
@@ -30,14 +31,12 @@ TAG_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 VALID_POSITIONS = ("user_message_before", "user_message_after", "system_prompt")
 
-MAX_ENTRIES = 20
-
 
 @register(
     "Lorebook",
     "FelisAbyssalis",
     "基于正则关键词匹配的世界书插件 - 当用户消息命中条目关键词时自动注入对应内容",
-    "1.2.0",
+    "2.0.0",
     "https://github.com/EmilyCheoh/astrbot_plugin_lorebook",
 )
 class LorebookPlugin(Star):
@@ -59,37 +58,58 @@ class LorebookPlugin(Star):
     # 世界书加载
     # -------------------------------------------------------------------
 
+    @staticmethod
+    def _parse_enabled(val: Any) -> bool:
+        """解析 enabled 字段：支持 bool / "T"/"F" / "true"/"false"。"""
+        if isinstance(val, bool):
+            return val
+        s = str(val).strip().upper()
+        return s in ("T", "TRUE", "1")
+
+    @staticmethod
+    def _parse_regex(val: Any) -> list[str]:
+        """解析 regex 字段：支持 "|" 分隔的字符串或字符串数组。"""
+        if isinstance(val, list):
+            return [str(v).strip() for v in val if str(v).strip()]
+        if isinstance(val, str):
+            return [s.strip() for s in val.split("|") if s.strip()]
+        return []
+
     def _load_lorebooks(self) -> None:
-        """从插件配置（template_list）中加载所有已启用的世界书及其条目。"""
+        """从插件配置的 JSON 文本字段中加载所有已启用的世界书及其条目。"""
         self._lorebooks = []
 
-        raw_books = self.config.get("lorebooks", [])
-        if not isinstance(raw_books, list):
+        raw_json = self.config.get("lorebooks_json", "[]")
+        if not isinstance(raw_json, str) or not raw_json.strip():
             return
 
-        for bi, book in enumerate(raw_books):
+        try:
+            books = json.loads(raw_json)
+        except json.JSONDecodeError as e:
+            logger.error(f"Lorebook: JSON 解析失败: {e}")
+            return
+
+        if not isinstance(books, list):
+            logger.error("Lorebook: JSON 顶层必须是数组")
+            return
+
+        for bi, book in enumerate(books):
             if not isinstance(book, dict):
                 continue
 
-            # 读取 lorebook_info 对象
-            info = book.get("lorebook_info", {})
-            if not isinstance(info, dict):
-                info = {}
-
-            enabled = bool(info.get("enabled", True))
-            if not enabled:
+            if not self._parse_enabled(book.get("enabled", True)):
                 continue
 
-            book_name = str(info.get("book_name", "")).strip()
+            book_name = str(book.get("book_name", "")).strip()
             if not book_name:
                 book_name = f"lorebook_{bi}"
 
             # 注入位置
-            pos = str(info.get("injection_position", "user_message_after")).strip()
+            pos = str(book.get("injection_position", "user_message_after")).strip()
             position = pos if pos in VALID_POSITIONS else "user_message_after"
 
             # XML 标签名
-            tag_name = str(info.get("tag_name", "Additional-Info")).strip()
+            tag_name = str(book.get("tag_name", "Additional-Info")).strip()
             if not tag_name or not TAG_NAME_PATTERN.match(tag_name):
                 logger.warning(
                     f"Lorebook [{book_name}]: "
@@ -105,25 +125,31 @@ class LorebookPlugin(Star):
             )
 
             # 标签头部说明文本
-            header_text = str(info.get("header_text", "")).strip()
+            header_text = str(book.get("header_text", "")).strip()
 
-            # 加载条目 (1 ~ MAX_ENTRIES)
+            # 加载条目——支持对象 {"entry_1": {...}} 或数组 [{...}]
+            entries_raw = book.get("entries", {})
+            if isinstance(entries_raw, dict):
+                entry_list = list(entries_raw.values())
+            elif isinstance(entries_raw, list):
+                entry_list = entries_raw
+            else:
+                entry_list = []
+
             entries: list[dict[str, Any]] = []
-            for i in range(1, MAX_ENTRIES + 1):
-                entry_obj = book.get(f"entry_{i}", {})
+            for entry_obj in entry_list:
                 if not isinstance(entry_obj, dict):
                     continue
 
-                entry_enabled = bool(entry_obj.get("enabled", True))
-                if not entry_enabled:
+                if not self._parse_enabled(entry_obj.get("enabled", True)):
                     continue
 
                 entry_name = str(entry_obj.get("name", "")).strip()
                 if not entry_name:
                     continue
 
-                keywords_raw = entry_obj.get("keywords", [])
-                if not isinstance(keywords_raw, list) or not keywords_raw:
+                regex_raw = self._parse_regex(entry_obj.get("regex", []))
+                if not regex_raw:
                     continue
 
                 content = str(entry_obj.get("content", ""))
@@ -131,20 +157,20 @@ class LorebookPlugin(Star):
                 if not content:
                     continue
 
-                priority = int(entry_obj.get("priority", 5))
+                try:
+                    priority = int(entry_obj.get("priority", 5))
+                except (ValueError, TypeError):
+                    priority = 5
 
                 # 预编译正则
                 compiled = []
-                for kw in keywords_raw:
-                    kw_str = str(kw).strip()
-                    if not kw_str:
-                        continue
+                for pattern_str in regex_raw:
                     try:
-                        compiled.append(re.compile(kw_str))
+                        compiled.append(re.compile(pattern_str))
                     except re.error as e:
                         logger.warning(
                             f"Lorebook [{book_name}/{entry_name}]: "
-                            f"关键词 '{kw_str}' 正则编译失败: {e}"
+                            f"正则 '{pattern_str}' 编译失败: {e}"
                         )
 
                 if not compiled:
@@ -159,7 +185,7 @@ class LorebookPlugin(Star):
 
                 logger.debug(
                     f"Lorebook [{book_name}]: 已加载条目 [{entry_name}] "
-                    f"(优先级: {priority}, 关键词数: {len(compiled)})"
+                    f"(优先级: {priority}, 正则数: {len(compiled)})"
                 )
 
             if not entries:
