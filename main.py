@@ -65,6 +65,9 @@ class LorebookPlugin(Star):
             flags=re.DOTALL,
         )
 
+        # 标签头部说明文本
+        self._header_text = str(config.get("header_text", "")).strip()
+
         # 从配置加载条目
         self._entries: list[dict[str, Any]] = []
         self._load_entries()
@@ -207,6 +210,8 @@ class LorebookPlugin(Star):
                 sections.append(f"#{i}\n{entry['content']}")
             body = "\n\n".join(sections)
 
+        if self._header_text:
+            return f"{self._header}\n{self._header_text}\n\n{body}\n{self._footer}\n"
         return f"{self._header}\n{body}\n{self._footer}\n"
 
     # -------------------------------------------------------------------

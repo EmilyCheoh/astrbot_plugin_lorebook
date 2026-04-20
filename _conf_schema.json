@@ -22,6 +22,12 @@
         "type": "string",
         "default": "Additional-Info"
     },
+    "header_text": {
+        "description": "标签头部说明文本",
+        "hint": "注入内容开头的说明文字，紧跟在 XML 开标签之后、条目内容之前。留空则不添加。",
+        "type": "text",
+        "default": ""
+    },
     "entries": {
         "description": "世界书条目",
         "type": "template_list",
