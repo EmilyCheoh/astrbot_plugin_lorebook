@@ -36,7 +36,7 @@ VALID_POSITIONS = ("user_message_before", "user_message_after", "system_prompt")
     "Lorebook",
     "FelisAbyssalis",
     "基于正则关键词匹配的世界书插件 - 当用户消息命中条目关键词时自动注入对应内容",
-    "2.0.0",
+    "2.1.0",
     "https://github.com/EmilyCheoh/astrbot_plugin_lorebook",
 )
 class LorebookPlugin(Star):
@@ -176,11 +176,27 @@ class LorebookPlugin(Star):
                 if not compiled:
                     continue
 
+                # 常驻标记
+                constant = self._parse_enabled(
+                    entry_obj.get("constant", False)
+                )
+
+                # 链接条目名
+                links_raw = entry_obj.get("links", [])
+                if isinstance(links_raw, str):
+                    links = [s.strip() for s in links_raw.split(",") if s.strip()]
+                elif isinstance(links_raw, list):
+                    links = [str(s).strip() for s in links_raw if str(s).strip()]
+                else:
+                    links = []
+
                 entries.append({
                     "name": entry_name,
                     "keywords": compiled,
                     "content": content,
                     "priority": priority,
+                    "constant": constant,
+                    "links": links,
                 })
 
                 logger.debug(
@@ -222,17 +238,53 @@ class LorebookPlugin(Star):
     def _match_entries(
         self, text: str, entries: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
-        """扫描文本，返回所有关键词命中的条目，按 priority 升序排列。"""
-        matched = []
+        """扫描文本，返回所有关键词命中的条目，按 priority 升序排列。
+
+        匹配后额外解析：
+        1. 若有任何条目命中，则追加所有 constant=True 的条目
+        2. 遍历已命中条目的 links 列表，追加被引用的条目（单层，不递归）
+        """
+        regex_matched: list[dict[str, Any]] = []
         for entry in entries:
             for pattern in entry["keywords"]:
                 if pattern.search(text):
-                    matched.append(entry)
+                    regex_matched.append(entry)
                     break
 
-        matched.sort(key=lambda e: e["priority"])
+        if not regex_matched:
+            return []
 
-        return matched
+        # 按名称索引全部条目，用于快速查找
+        entry_by_name: dict[str, dict[str, Any]] = {
+            e["name"]: e for e in entries
+        }
+
+        matched_names: set[str] = {e["name"] for e in regex_matched}
+        final: list[dict[str, Any]] = list(regex_matched)
+
+        # 1) 追加常驻条目
+        for entry in entries:
+            if entry["constant"] and entry["name"] not in matched_names:
+                final.append(entry)
+                matched_names.add(entry["name"])
+
+        # 2) 解析链接（单层）
+        for entry in list(final):
+            for linked_name in entry.get("links", []):
+                if linked_name not in matched_names:
+                    linked = entry_by_name.get(linked_name)
+                    if linked:
+                        final.append(linked)
+                        matched_names.add(linked_name)
+                    else:
+                        logger.warning(
+                            f"Lorebook: 条目 [{entry['name']}] "
+                            f"链接了不存在的条目 [{linked_name}]"
+                        )
+
+        final.sort(key=lambda e: e["priority"])
+
+        return final
 
     def _dedup_against_rag(
         self,
