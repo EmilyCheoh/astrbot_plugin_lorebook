@@ -36,7 +36,7 @@ VALID_POSITIONS = ("user_message_before", "user_message_after", "system_prompt")
     "Lorebook",
     "FelisAbyssalis",
     "基于正则关键词匹配的世界书插件 - 当用户消息命中条目关键词时自动注入对应内容",
-    "2.1.0",
+    "2.2.0",
     "https://github.com/EmilyCheoh/astrbot_plugin_lorebook",
 )
 class LorebookPlugin(Star):
@@ -46,6 +46,8 @@ class LorebookPlugin(Star):
         self.config = config
 
         self._lorebooks: list[dict[str, Any]] = []
+        # cooldown state: session_id -> entry_key -> rounds_remaining
+        self._cooldown_counters: dict[str, dict[str, int]] = {}
         self._load_lorebooks()
 
         if self._lorebooks:
@@ -190,6 +192,14 @@ class LorebookPlugin(Star):
                 else:
                     links = []
 
+                # 冷却轮数
+                try:
+                    cooldown = int(entry_obj.get("cooldown", 0))
+                except (ValueError, TypeError):
+                    cooldown = 0
+                if cooldown < 0:
+                    cooldown = 0
+
                 entries.append({
                     "name": entry_name,
                     "keywords": compiled,
@@ -197,6 +207,7 @@ class LorebookPlugin(Star):
                     "priority": priority,
                     "constant": constant,
                     "links": links,
+                    "cooldown": cooldown,
                 })
 
                 logger.debug(
@@ -225,6 +236,45 @@ class LorebookPlugin(Star):
             )
 
         logger.info(f"Lorebook: 共加载 {len(self._lorebooks)} 本世界书")
+
+    # -------------------------------------------------------------------
+    # 冷却
+    # -------------------------------------------------------------------
+
+    def _apply_cooldown(
+        self,
+        matched: list[dict[str, Any]],
+        book_name: str,
+        session_id: str,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """过滤掉处于冷却期的条目，并为本次注入的条目启动冷却。
+
+        冷却计数器在条目被跳过时递减，无需单独的 tick 步骤。
+
+        Returns:
+            (kept, cooled_down)
+        """
+        session = self._cooldown_counters.setdefault(session_id, {})
+
+        kept: list[dict[str, Any]] = []
+        cooled_down: list[dict[str, Any]] = []
+
+        for entry in matched:
+            cd = entry.get("cooldown", 0)
+            if cd <= 0:
+                kept.append(entry)
+                continue
+
+            key = f"{book_name}:{entry['name']}"
+            remaining = session.get(key, 0)
+            if remaining > 0:
+                session[key] = remaining - 1
+                cooled_down.append(entry)
+            else:
+                kept.append(entry)
+                session[key] = cd
+
+        return kept, cooled_down
 
     # -------------------------------------------------------------------
     # 匹配
@@ -544,6 +594,21 @@ class LorebookPlugin(Star):
                 if not matched:
                     continue
 
+                # 冷却：跳过处于冷却期的条目
+                matched, cooled = self._apply_cooldown(
+                    matched, lb["name"], session_id
+                )
+
+                if cooled:
+                    logger.info(
+                        f"[{session_id}] Lorebook [{lb['name']}] [冷却]: "
+                        f"跳过 {len(cooled)} 个冷却中的条目: "
+                        f"{[e['name'] for e in cooled]}"
+                    )
+
+                if not matched:
+                    continue
+
                 injection = self._format_injection(matched, lb)
                 self._inject_text(req, injection, lb["position"])
 
@@ -562,4 +627,5 @@ class LorebookPlugin(Star):
 
     async def terminate(self):
         self._lorebooks = []
+        self._cooldown_counters = {}
         logger.info("Lorebook 插件已停止")
