@@ -285,35 +285,41 @@ class LorebookPlugin(Star):
         """将连续空白压缩为单个空格，用于去重比较。"""
         return re.sub(r"\s+", " ", text).strip()
 
-    def _match_entries(
-        self, text: str, entries: list[dict[str, Any]]
+    @staticmethod
+    def _regex_match_entries(
+        text: str, entries: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
-        """扫描文本，返回所有关键词命中的条目，按 priority 升序排列。
-
-        匹配后额外解析：
-        1. 若有任何条目命中，则追加所有 constant=True 的条目
-        2. 遍历已命中条目的 links 列表，追加被引用的条目（单层，不递归）
-        """
-        regex_matched: list[dict[str, Any]] = []
+        """扫描文本，返回所有关键词命中的条目（纯 regex，不含 constant/links）。"""
+        matched: list[dict[str, Any]] = []
         for entry in entries:
             for pattern in entry["keywords"]:
                 if pattern.search(text):
-                    regex_matched.append(entry)
+                    matched.append(entry)
                     break
+        return matched
 
+    @staticmethod
+    def _expand_matches(
+        regex_matched: list[dict[str, Any]],
+        all_entries: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """在 regex 命中基础上追加 constant 条目和 links，按 priority 升序排列。
+
+        1. 若有任何条目命中，则追加所有 constant=True 的条目
+        2. 遍历已命中条目的 links 列表，追加被引用的条目（单层，不递归）
+        """
         if not regex_matched:
             return []
 
-        # 按名称索引全部条目，用于快速查找
         entry_by_name: dict[str, dict[str, Any]] = {
-            e["name"]: e for e in entries
+            e["name"]: e for e in all_entries
         }
 
         matched_names: set[str] = {e["name"] for e in regex_matched}
         final: list[dict[str, Any]] = list(regex_matched)
 
         # 1) 追加常驻条目
-        for entry in entries:
+        for entry in all_entries:
             if entry["constant"] and entry["name"] not in matched_names:
                 final.append(entry)
                 matched_names.add(entry["name"])
@@ -575,11 +581,34 @@ class LorebookPlugin(Star):
             session_id = event.unified_msg_origin or "unknown"
 
             for lb in self._lorebooks:
-                matched = self._match_entries(user_text, lb["entries"])
-                if not matched:
+                # 第一步：纯 regex 匹配
+                regex_matched = self._regex_match_entries(
+                    user_text, lb["entries"]
+                )
+                if not regex_matched:
                     continue
 
-                # 去重：跳过已被 RAG 注入的条目
+                # 第二步：对 regex 命中条目过冷却
+                regex_matched, cooled = self._apply_cooldown(
+                    regex_matched, lb["name"], session_id
+                )
+
+                if cooled:
+                    logger.info(
+                        f"[{session_id}] Lorebook [{lb['name']}] [冷却]: "
+                        f"跳过 {len(cooled)} 个冷却中的条目: "
+                        f"{[e['name'] for e in cooled]}"
+                    )
+
+                if not regex_matched:
+                    continue
+
+                # 第三步：冷却后有存活 → 展开 constant + links
+                matched = self._expand_matches(
+                    regex_matched, lb["entries"]
+                )
+
+                # 第四步：去重——跳过已被 RAG 注入的条目
                 matched, skipped = self._dedup_against_rag(
                     matched, req.prompt or ""
                 )
@@ -589,21 +618,6 @@ class LorebookPlugin(Star):
                         f"[{session_id}] Lorebook [{lb['name']}] [去重]: "
                         f"跳过 {len(skipped)} 个已被 RAG 覆盖的条目: "
                         f"{[e['name'] for e in skipped]}"
-                    )
-
-                if not matched:
-                    continue
-
-                # 冷却：跳过处于冷却期的条目
-                matched, cooled = self._apply_cooldown(
-                    matched, lb["name"], session_id
-                )
-
-                if cooled:
-                    logger.info(
-                        f"[{session_id}] Lorebook [{lb['name']}] [冷却]: "
-                        f"跳过 {len(cooled)} 个冷却中的条目: "
-                        f"{[e['name'] for e in cooled]}"
                     )
 
                 if not matched:
