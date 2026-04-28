@@ -46,8 +46,9 @@ class LorebookPlugin(Star):
         self.config = config
 
         self._lorebooks: list[dict[str, Any]] = []
-        # cooldown state: session_id -> entry_key -> rounds_remaining
-        self._cooldown_counters: dict[str, dict[str, int]] = {}
+        # cooldown state: turn-based
+        self._session_turns: dict[str, int] = {}
+        self._cooldown_state: dict[str, dict[str, int]] = {}
         self._load_lorebooks()
 
         if self._lorebooks:
@@ -246,15 +247,17 @@ class LorebookPlugin(Star):
         matched: list[dict[str, Any]],
         book_name: str,
         session_id: str,
+        current_turn: int,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        """过滤掉处于冷却期的条目，并为本次注入的条目启动冷却。
+        """过滤掉处于冷却期的条目，并为本次注入的条目记录注入轮次。
 
-        冷却计数器在条目被跳过时递减，无需单独的 tick 步骤。
+        冷却基于对话轮次：注入后的 N 轮内（无论用户消息是否命中该条目）
+        均视为冷却期。轮次在 handle_inject 入口处递增。
 
         Returns:
             (kept, cooled_down)
         """
-        session = self._cooldown_counters.setdefault(session_id, {})
+        state = self._cooldown_state.setdefault(session_id, {})
 
         kept: list[dict[str, Any]] = []
         cooled_down: list[dict[str, Any]] = []
@@ -266,13 +269,12 @@ class LorebookPlugin(Star):
                 continue
 
             key = f"{book_name}:{entry['name']}"
-            remaining = session.get(key, 0)
-            if remaining > 0:
-                session[key] = remaining - 1
+            last_injected = state.get(key, 0)
+            if last_injected > 0 and (current_turn - last_injected) <= cd:
                 cooled_down.append(entry)
             else:
                 kept.append(entry)
-                session[key] = cd
+                state[key] = current_turn
 
         return kept, cooled_down
 
@@ -580,6 +582,10 @@ class LorebookPlugin(Star):
 
             session_id = event.unified_msg_origin or "unknown"
 
+            # 每条用户消息 = 一轮，无论内容是否命中任何条目
+            turn = self._session_turns.get(session_id, 0) + 1
+            self._session_turns[session_id] = turn
+
             for lb in self._lorebooks:
                 # 第一步：纯 regex 匹配
                 regex_matched = self._regex_match_entries(
@@ -590,7 +596,7 @@ class LorebookPlugin(Star):
 
                 # 第二步：对 regex 命中条目过冷却
                 regex_matched, cooled = self._apply_cooldown(
-                    regex_matched, lb["name"], session_id
+                    regex_matched, lb["name"], session_id, turn
                 )
 
                 if cooled:
@@ -641,5 +647,6 @@ class LorebookPlugin(Star):
 
     async def terminate(self):
         self._lorebooks = []
-        self._cooldown_counters = {}
+        self._session_turns = {}
+        self._cooldown_state = {}
         logger.info("Lorebook 插件已停止")
