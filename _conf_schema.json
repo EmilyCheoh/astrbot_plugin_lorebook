@@ -2,7 +2,7 @@
     "lorebooks_json": {
         "description": "世界书 JSON 配置",
         "type": "text",
-        "hint": "在此粘贴完整的世界书 JSON 配置。格式为 JSON 数组，每个元素是一本世界书。enabled 接受 \"T\"/\"F\" 或 true/false；priority 接受字符串或数字；regex 接受 \"|\" 分隔的字符串或数组。条目数量不限。详见 README。",
+        "hint": "https://tools.littlebatcat.uk/lorebook_helper.html",
         "default": "[]"
     }
 }
