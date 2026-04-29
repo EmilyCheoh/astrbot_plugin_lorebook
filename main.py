@@ -27,7 +27,7 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star, register
 
-TAG_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
+TAG_NAME_INVALID = re.compile(r"[<>\n\r]")
 
 VALID_POSITIONS = ("user_message_before", "user_message_after", "system_prompt")
 
@@ -36,7 +36,7 @@ VALID_POSITIONS = ("user_message_before", "user_message_after", "system_prompt")
     "Lorebook",
     "FelisAbyssalis",
     "基于正则关键词匹配的世界书插件 - 当用户消息命中条目关键词时自动注入对应内容",
-    "2.2.0",
+    "2.2.1",
     "https://github.com/EmilyCheoh/astrbot_plugin_lorebook",
 )
 class LorebookPlugin(Star):
@@ -53,9 +53,9 @@ class LorebookPlugin(Star):
 
         if self._lorebooks:
             names = [lb["name"] for lb in self._lorebooks]
-            logger.info(f"Lorebook 插件初始化完成 (已加载世界书: {names})")
+            logger.info(f"世界书插件初始化完成 (已加载世界书: {names})")
         else:
-            logger.info("Lorebook 插件已加载但没有启用的世界书")
+            logger.info("世界书插件已加载但没有启用的世界书")
 
     # -------------------------------------------------------------------
     # 世界书加载
@@ -89,11 +89,11 @@ class LorebookPlugin(Star):
         try:
             books = json.loads(raw_json)
         except json.JSONDecodeError as e:
-            logger.error(f"Lorebook: JSON 解析失败: {e}")
+            logger.error(f"世界书插件: JSON 解析失败: {e}")
             return
 
         if not isinstance(books, list):
-            logger.error("Lorebook: JSON 顶层必须是数组")
+            logger.error("世界书插件: JSON 顶层必须是数组")
             return
 
         for bi, book in enumerate(books):
@@ -113,10 +113,10 @@ class LorebookPlugin(Star):
 
             # XML 标签名
             tag_name = str(book.get("tag_name", "Additional-Info")).strip()
-            if not tag_name or not TAG_NAME_PATTERN.match(tag_name):
+            if not tag_name or TAG_NAME_INVALID.search(tag_name):
                 logger.warning(
-                    f"Lorebook [{book_name}]: "
-                    f"标签名称为空或包含非法字符，回退到默认值 Additional-Info"
+                    f"世界书插件 [{book_name}]: "
+                    f"标签名称为空或包含非法字符 (<, >, 换行)，回退到默认值 Additional-Info"
                 )
                 tag_name = "Additional-Info"
 
@@ -172,7 +172,7 @@ class LorebookPlugin(Star):
                         compiled.append(re.compile(pattern_str))
                     except re.error as e:
                         logger.warning(
-                            f"Lorebook [{book_name}/{entry_name}]: "
+                            f"世界书插件 [{book_name}/{entry_name}]: "
                             f"正则 '{pattern_str}' 编译失败: {e}"
                         )
 
@@ -212,12 +212,12 @@ class LorebookPlugin(Star):
                 })
 
                 logger.debug(
-                    f"Lorebook [{book_name}]: 已加载条目 [{entry_name}] "
+                    f"世界书插件 [{book_name}]: 已加载条目 [{entry_name}] "
                     f"(优先级: {priority}, 正则数: {len(compiled)})"
                 )
 
             if not entries:
-                logger.info(f"Lorebook [{book_name}]: 没有有效条目，跳过")
+                logger.info(f"世界书插件 [{book_name}]: 没有有效条目，跳过")
                 continue
 
             self._lorebooks.append({
@@ -232,11 +232,11 @@ class LorebookPlugin(Star):
             })
 
             logger.info(
-                f"Lorebook [{book_name}]: 已加载 {len(entries)} 个条目 "
+                f"世界书插件 [{book_name}]: 已加载 {len(entries)} 个条目 "
                 f"(标签: {tag_name}, 位置: {position})"
             )
 
-        logger.info(f"Lorebook: 共加载 {len(self._lorebooks)} 本世界书")
+        logger.info(f"世界书插件: 共加载 {len(self._lorebooks)} 本世界书")
 
     # -------------------------------------------------------------------
     # 冷却
@@ -336,7 +336,7 @@ class LorebookPlugin(Star):
                         matched_names.add(linked_name)
                     else:
                         logger.warning(
-                            f"Lorebook: 条目 [{entry['name']}] "
+                            f"世界书插件: 条目 [{entry['name']}] "
                             f"链接了不存在的条目 [{linked_name}]"
                         )
 
@@ -557,11 +557,11 @@ class LorebookPlugin(Star):
             if removed > 0:
                 session_id = event.unified_msg_origin or "unknown"
                 logger.info(
-                    f"[{session_id}] Lorebook [清理]: "
+                    f"[{session_id}] 世界书插件 [清理]: "
                     f"已清理 {removed} 处历史注入"
                 )
         except Exception as e:
-            logger.error(f"Lorebook [清理]: {e}", exc_info=True)
+            logger.error(f"世界书插件 [清理]: {e}", exc_info=True)
 
     @filter.on_llm_request(priority=-498)
     async def handle_inject(
@@ -601,7 +601,7 @@ class LorebookPlugin(Star):
 
                 if cooled:
                     logger.info(
-                        f"[{session_id}] Lorebook [{lb['name']}] [冷却]: "
+                        f"[{session_id}] 世界书插件 [{lb['name']}] [冷却]: "
                         f"跳过 {len(cooled)} 个冷却中的条目: "
                         f"{[e['name'] for e in cooled]}"
                     )
@@ -621,7 +621,7 @@ class LorebookPlugin(Star):
 
                 if skipped:
                     logger.info(
-                        f"[{session_id}] Lorebook [{lb['name']}] [去重]: "
+                        f"[{session_id}] 世界书插件 [{lb['name']}] [去重]: "
                         f"跳过 {len(skipped)} 个已被 RAG 覆盖的条目: "
                         f"{[e['name'] for e in skipped]}"
                     )
@@ -634,12 +634,12 @@ class LorebookPlugin(Star):
 
                 names = [e["name"] for e in matched]
                 logger.info(
-                    f"[{session_id}] Lorebook [{lb['name']}] [注入]: "
+                    f"[{session_id}] 世界书插件 [{lb['name']}] [注入]: "
                     f"匹配到 {len(matched)} 个条目: {names}"
                 )
 
         except Exception as e:
-            logger.error(f"Lorebook [注入]: {e}", exc_info=True)
+            logger.error(f"世界书插件 [注入]: {e}", exc_info=True)
 
     # -------------------------------------------------------------------
     # 生命周期
@@ -649,4 +649,4 @@ class LorebookPlugin(Star):
         self._lorebooks = []
         self._session_turns = {}
         self._cooldown_state = {}
-        logger.info("Lorebook 插件已停止")
+        logger.info("世界书插件已停止")

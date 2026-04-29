@@ -1,6 +1,6 @@
 name: astrbot_plugin_lorebook
-display_name: "世界书🦇🐈‍⬛📖"
+display_name: "世界书📖"
 description: 基于正则关键词匹配的世界书插件 - 当用户消息命中条目关键词时，自动将对应内容注入到 LLM 请求中
-version: 1.0.0
+version: 2.2.1
 author: Felis Abyssalis
 repo: "https://github.com/EmilyCheoh/astrbot_plugin_lorebook"
