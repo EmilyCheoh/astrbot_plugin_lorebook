@@ -577,10 +577,10 @@ class LorebookPlugin(Star):
             removed = self._clean_contexts(req)
             if removed > 0:
                 session_id = event.unified_msg_origin or "unknown"
-                logger.info(
-                    f"[{session_id}] 世界书插件 [清理]: "
-                    f"已清理 {removed} 处历史注入"
-                )
+                # logger.info(
+                #     f"世界书插件 [清理]: "
+                #     f"已清理 {removed} 处历史注入"
+                # )
         except Exception as e:
             logger.error(f"世界书插件 [清理]: {e}", exc_info=True)
 
@@ -627,7 +627,7 @@ class LorebookPlugin(Star):
 
                 if cooled:
                     logger.info(
-                        f"[{session_id}] 世界书插件 [{book_name}] [冷却]: "
+                        f"世界书插件 [{book_name}] [冷却]: "
                         f"跳过 {len(cooled)} 个冷却中的条目: "
                         f"{[e['name'] for e in cooled]}"
                     )
@@ -647,7 +647,7 @@ class LorebookPlugin(Star):
 
                 if skipped:
                     logger.info(
-                        f"[{session_id}] 世界书插件 [{book_name}] [去重]: "
+                        f"世界书插件 [{book_name}] [去重]: "
                         f"跳过 {len(skipped)} 个已被 RAG 覆盖的条目: "
                         f"{[e['name'] for e in skipped]}"
                     )
@@ -669,35 +669,49 @@ class LorebookPlugin(Star):
                     else:
                         regular_entries.append(entry)
 
+                book_prefix = f"{book_name}:"
+
                 # 注入 stay 条目（原始标签，注入一次后留驻）
                 if stay_entries:
+                    first_stay = not any(
+                        k.startswith(book_prefix)
+                        for k in stayed_set - {
+                            f"{book_name}:{e['name']}"
+                            for e in stay_entries
+                        }
+                    )
                     injection = self._format_injection(
                         stay_entries,
                         lb["header"],
                         lb["footer"],
-                        lb["header_text"],
+                        lb["header_text"] if first_stay else "",
                     )
                     self._inject_text(req, injection, lb["position"])
 
                     names = [e["name"] for e in stay_entries]
                     logger.info(
-                        f"[{session_id}] 世界书插件 [{book_name}] [留驻注入]: "
+                        f"世界书插件 [{book_name}] [留驻注入]: "
                         f"{len(stay_entries)} 个条目: {names}"
                     )
 
                 # 注入 regular 条目（💜 标签，每轮清理重注入）
                 if regular_entries:
+                    # 同书已有留驻内容时不再重复 header_text
+                    book_has_stayed = any(
+                        k.startswith(book_prefix)
+                        for k in stayed_set
+                    )
                     injection = self._format_injection(
                         regular_entries,
                         lb["p_header"],
                         lb["p_footer"],
-                        lb["header_text"],
+                        "" if book_has_stayed else lb["header_text"],
                     )
                     self._inject_text(req, injection, lb["position"])
 
                     names = [e["name"] for e in regular_entries]
                     logger.info(
-                        f"[{session_id}] 世界书插件 [{book_name}] [注入]: "
+                        f"世界书插件 [{book_name}] [注入]: "
                         f"{len(regular_entries)} 个条目: {names}"
                     )
 
