@@ -655,7 +655,32 @@ class LorebookPlugin(Star):
                 if not matched:
                     continue
 
-                # 第五步：分流 stay vs regular
+                # 第五步：验证留驻完整性
+                # 如果上下文中找不到原始标签，说明历史被外部清除，
+                # 需要移除 stayed_set 中对应的记录让条目重新注入
+                if any(k.startswith(f"{book_name}:") for k in stayed_set):
+                    ctx_text = (req.prompt or "") + (req.system_prompt or "")
+                    if hasattr(req, "contexts") and req.contexts:
+                        for msg in req.contexts:
+                            if isinstance(msg, str):
+                                ctx_text += msg
+                            elif isinstance(msg, dict):
+                                c = msg.get("content", "")
+                                if isinstance(c, str):
+                                    ctx_text += c
+                    if lb["header"] not in ctx_text:
+                        purged = {
+                            k for k in stayed_set
+                            if k.startswith(f"{book_name}:")
+                        }
+                        stayed_set -= purged
+                        logger.info(
+                            f"世界书插件 [{book_name}] [留驻恢复]: "
+                            f"上下文中未找到原始标签，已重置 "
+                            f"{len(purged)} 个留驻条目"
+                        )
+
+                # 第六步：分流 stay vs regular
                 stay_entries: list[dict[str, Any]] = []
                 regular_entries: list[dict[str, Any]] = []
 
