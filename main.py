@@ -1,8 +1,7 @@
 """
 Lorebook - 世界书插件
 
-基于正则关键词匹配的轻量世界书实现。支持多本世界书，每本包含独立的注入设置
-和最多 20 个条目。每轮 LLM 请求前：
+基于正则关键词匹配的轻量世界书实现。：
 1. 清理上一轮注入到对话历史中的世界书标签
 2. 扫描当前用户消息，对所有已启用世界书的已启用条目做正则匹配
 3. 对命中条目做 RAG 去重：若条目内容已被 RAG 注入到 prompt 中则跳过
@@ -36,7 +35,7 @@ VALID_POSITIONS = ("user_message_before", "user_message_after", "system_prompt")
     "Lorebook",
     "FelisAbyssalis",
     "基于正则关键词匹配的世界书插件 - 当用户消息命中条目关键词时自动注入对应内容",
-    "2.2.1",
+    "2.3.0",
     "https://github.com/EmilyCheoh/astrbot_plugin_lorebook",
 )
 class LorebookPlugin(Star):
@@ -49,6 +48,9 @@ class LorebookPlugin(Star):
         # cooldown state: turn-based
         self._session_turns: dict[str, int] = {}
         self._cooldown_state: dict[str, dict[str, int]] = {}
+        # stay state: tracks which stay entries have already been injected
+        # {session_id: {book_name:entry_name, ...}}
+        self._stayed: dict[str, set[str]] = {}
         self._load_lorebooks()
 
         if self._lorebooks:
@@ -122,8 +124,13 @@ class LorebookPlugin(Star):
 
             header = f"<{tag_name}>"
             footer = f"</{tag_name}>"
-            cleanup_re = re.compile(
-                re.escape(header) + r".*?" + re.escape(footer),
+
+            # 💜 variant: used for regular (non-stay) entries
+            p_tag_name = f"{tag_name} 💜"
+            p_header = f"<{p_tag_name}>"
+            p_footer = f"</{p_tag_name}>"
+            p_cleanup_re = re.compile(
+                re.escape(p_header) + r".*?" + re.escape(p_footer),
                 flags=re.DOTALL,
             )
 
@@ -184,6 +191,11 @@ class LorebookPlugin(Star):
                     entry_obj.get("constant", False)
                 )
 
+                # 留驻标记
+                stay = self._parse_enabled(
+                    entry_obj.get("stay", False)
+                )
+
                 # 链接条目名
                 links_raw = entry_obj.get("links", [])
                 if isinstance(links_raw, str):
@@ -207,8 +219,9 @@ class LorebookPlugin(Star):
                     "content": content,
                     "priority": priority,
                     "constant": constant,
+                    "stay": stay,
                     "links": links,
-                    "cooldown": cooldown,
+                    "cooldown": 0 if stay else cooldown,
                 })
 
                 logger.debug(
@@ -226,9 +239,13 @@ class LorebookPlugin(Star):
                 "tag_name": tag_name,
                 "header": header,
                 "footer": footer,
-                "cleanup_re": cleanup_re,
                 "header_text": header_text,
                 "entries": entries,
+                # 💜 variant for cleanup
+                "p_tag_name": p_tag_name,
+                "p_header": p_header,
+                "p_footer": p_footer,
+                "p_cleanup_re": p_cleanup_re,
             })
 
             logger.info(
@@ -374,8 +391,12 @@ class LorebookPlugin(Star):
     # 格式化
     # -------------------------------------------------------------------
 
+    @staticmethod
     def _format_injection(
-        self, entries: list[dict[str, Any]], lorebook: dict[str, Any]
+        entries: list[dict[str, Any]],
+        header: str,
+        footer: str,
+        header_text: str = "",
     ) -> str:
         """将匹配到的条目拼装为 XML 标签包裹的注入内容。"""
         if len(entries) == 1:
@@ -385,10 +406,6 @@ class LorebookPlugin(Star):
             for i, entry in enumerate(entries, 1):
                 sections.append(f"#{i}\n{entry['content']}")
             body = "\n\n".join(sections)
-
-        header = lorebook["header"]
-        footer = lorebook["footer"]
-        header_text = lorebook["header_text"]
 
         if header_text:
             return f"{header}\n{header_text}\n\n{body}\n{footer}\n"
@@ -404,13 +421,17 @@ class LorebookPlugin(Star):
         return cleaned.strip()
 
     def _clean_contexts(self, req: ProviderRequest) -> int:
-        """从 ProviderRequest 的所有位置中清除上一轮注入的世界书标签。"""
+        """从 ProviderRequest 的所有位置中清除上一轮注入的 💜 标签。
+
+        只清理带 💜 后缀的标签；stay 条目使用原始标签名，
+        不会被匹配到，因此自然留驻在上下文历史中。
+        """
         removed = 0
 
         for lb in self._lorebooks:
-            header = lb["header"]
-            footer = lb["footer"]
-            cleanup_re = lb["cleanup_re"]
+            header = lb["p_header"]
+            footer = lb["p_footer"]
+            cleanup_re = lb["p_cleanup_re"]
 
             if hasattr(req, "system_prompt") and req.system_prompt:
                 if (
@@ -571,6 +592,8 @@ class LorebookPlugin(Star):
         [注入阶段] priority=-498，在所有其他插件之后执行。
 
         扫描当前用户消息，匹配各世界书条目，将命中内容注入到指定位置。
+        stay 条目使用原始标签注入一次后留驻；普通条目使用 💜
+        后缀标签，每轮清理后重新注入。
         """
         if not self._lorebooks:
             return
@@ -581,12 +604,15 @@ class LorebookPlugin(Star):
                 return
 
             session_id = event.unified_msg_origin or "unknown"
+            stayed_set = self._stayed.setdefault(session_id, set())
 
             # 每条用户消息 = 一轮，无论内容是否命中任何条目
             turn = self._session_turns.get(session_id, 0) + 1
             self._session_turns[session_id] = turn
 
             for lb in self._lorebooks:
+                book_name = lb["name"]
+
                 # 第一步：纯 regex 匹配
                 regex_matched = self._regex_match_entries(
                     user_text, lb["entries"]
@@ -594,14 +620,14 @@ class LorebookPlugin(Star):
                 if not regex_matched:
                     continue
 
-                # 第二步：对 regex 命中条目过冷却
+                # 第二步：对 regex 命中条目过冷却（stay 条目 cooldown=0，不受影响）
                 regex_matched, cooled = self._apply_cooldown(
-                    regex_matched, lb["name"], session_id, turn
+                    regex_matched, book_name, session_id, turn
                 )
 
                 if cooled:
                     logger.info(
-                        f"[{session_id}] 世界书插件 [{lb['name']}] [冷却]: "
+                        f"[{session_id}] 世界书插件 [{book_name}] [冷却]: "
                         f"跳过 {len(cooled)} 个冷却中的条目: "
                         f"{[e['name'] for e in cooled]}"
                     )
@@ -621,7 +647,7 @@ class LorebookPlugin(Star):
 
                 if skipped:
                     logger.info(
-                        f"[{session_id}] 世界书插件 [{lb['name']}] [去重]: "
+                        f"[{session_id}] 世界书插件 [{book_name}] [去重]: "
                         f"跳过 {len(skipped)} 个已被 RAG 覆盖的条目: "
                         f"{[e['name'] for e in skipped]}"
                     )
@@ -629,14 +655,51 @@ class LorebookPlugin(Star):
                 if not matched:
                     continue
 
-                injection = self._format_injection(matched, lb)
-                self._inject_text(req, injection, lb["position"])
+                # 第五步：分流 stay vs regular
+                stay_entries: list[dict[str, Any]] = []
+                regular_entries: list[dict[str, Any]] = []
 
-                names = [e["name"] for e in matched]
-                logger.info(
-                    f"[{session_id}] 世界书插件 [{lb['name']}] [注入]: "
-                    f"匹配到 {len(matched)} 个条目: {names}"
-                )
+                for entry in matched:
+                    if entry.get("stay"):
+                        key = f"{book_name}:{entry['name']}"
+                        if key not in stayed_set:
+                            stay_entries.append(entry)
+                            stayed_set.add(key)
+                        # else: already injected & persisted, skip
+                    else:
+                        regular_entries.append(entry)
+
+                # 注入 stay 条目（原始标签，注入一次后留驻）
+                if stay_entries:
+                    injection = self._format_injection(
+                        stay_entries,
+                        lb["header"],
+                        lb["footer"],
+                        lb["header_text"],
+                    )
+                    self._inject_text(req, injection, lb["position"])
+
+                    names = [e["name"] for e in stay_entries]
+                    logger.info(
+                        f"[{session_id}] 世界书插件 [{book_name}] [留驻注入]: "
+                        f"{len(stay_entries)} 个条目: {names}"
+                    )
+
+                # 注入 regular 条目（💜 标签，每轮清理重注入）
+                if regular_entries:
+                    injection = self._format_injection(
+                        regular_entries,
+                        lb["p_header"],
+                        lb["p_footer"],
+                        lb["header_text"],
+                    )
+                    self._inject_text(req, injection, lb["position"])
+
+                    names = [e["name"] for e in regular_entries]
+                    logger.info(
+                        f"[{session_id}] 世界书插件 [{book_name}] [注入]: "
+                        f"{len(regular_entries)} 个条目: {names}"
+                    )
 
         except Exception as e:
             logger.error(f"世界书插件 [注入]: {e}", exc_info=True)
@@ -649,4 +712,5 @@ class LorebookPlugin(Star):
         self._lorebooks = []
         self._session_turns = {}
         self._cooldown_state = {}
+        self._stayed = {}
         logger.info("世界书插件已停止")
