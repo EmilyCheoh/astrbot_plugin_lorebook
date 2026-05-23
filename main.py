@@ -126,7 +126,7 @@ class LorebookPlugin(Star):
             footer = f"</{tag_name}>"
 
             # 💜 variant: used for regular (non-stay) entries
-            p_tag_name = f"{tag_name} 💜"
+            p_tag_name = f"{tag_name}."
             p_header = f"<{p_tag_name}>"
             p_footer = f"</{p_tag_name}>"
             p_cleanup_re = re.compile(
