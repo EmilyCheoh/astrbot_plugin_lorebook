@@ -696,22 +696,23 @@ class LorebookPlugin(Star):
                     else:
                         regular_entries.append(entry)
 
-                book_prefix = f"{book_name}:"
+                # 确定注入顺序：stay 始终出现在 regular 前面
+                # - append 类位置 (user_message_after, system_prompt)：
+                #   先注入 stay，再注入 regular
+                # - prepend 类位置 (user_message_before)：
+                #   先注入 regular，再注入 stay（后 prepend 的在最前）
+                prepend = lb["position"] == "user_message_before"
 
-                # 注入 stay 条目（💜 标签，注入一次后留驻）
-                if stay_entries:
-                    first_stay = not any(
-                        k.startswith(book_prefix)
-                        for k in stayed_set - {
-                            f"{book_name}:{e['name']}"
-                            for e in stay_entries
-                        }
-                    )
+                def _inject_stay() -> None:
+                    if not stay_entries:
+                        return
+                    # 每个 stay 注入都携带 header_text，保证自包含——
+                    # stay 条目是少数且注入后不再重复，轻度冗余可接受
                     injection = self._format_injection(
                         stay_entries,
                         lb["p_header"],
                         lb["p_footer"],
-                        lb["header_text"] if first_stay else "",
+                        lb["header_text"],
                     )
                     self._inject_text(req, injection, lb["position"])
 
@@ -721,18 +722,16 @@ class LorebookPlugin(Star):
                         f"{len(stay_entries)} 个条目: {names}"
                     )
 
-                # 注入 regular 条目（原始标签，每轮清理重注入）
-                if regular_entries:
-                    # 同书已有留驻内容时不再重复 header_text
-                    book_has_stayed = any(
-                        k.startswith(book_prefix)
-                        for k in stayed_set
-                    )
+                def _inject_regular() -> None:
+                    if not regular_entries:
+                        return
+                    # 同轮有 stay 条目同时注入时，header_text 已由 stay 标签携带，
+                    # 不再重复；否则 regular 自行附带 header_text
                     injection = self._format_injection(
                         regular_entries,
                         lb["header"],
                         lb["footer"],
-                        "" if book_has_stayed else lb["header_text"],
+                        "" if stay_entries else lb["header_text"],
                     )
                     self._inject_text(req, injection, lb["position"])
 
@@ -741,6 +740,13 @@ class LorebookPlugin(Star):
                         f"世界书插件 [{book_name}] [注入]: "
                         f"{len(regular_entries)} 个条目: {names}"
                     )
+
+                if prepend:
+                    _inject_regular()
+                    _inject_stay()
+                else:
+                    _inject_stay()
+                    _inject_regular()
 
         except Exception as e:
             logger.error(f"世界书插件 [注入]: {e}", exc_info=True)
