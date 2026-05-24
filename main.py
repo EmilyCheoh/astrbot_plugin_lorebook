@@ -125,12 +125,14 @@ class LorebookPlugin(Star):
             header = f"<{tag_name}>"
             footer = f"</{tag_name}>"
 
-            # 💜 variant: used for regular (non-stay) entries
+            # 💜 variant: used for stay entries (persists across turns)
             p_tag_name = f"{tag_name}."
             p_header = f"<{p_tag_name}>"
             p_footer = f"</{p_tag_name}>"
-            p_cleanup_re = re.compile(
-                re.escape(p_header) + r".*?" + re.escape(p_footer),
+
+            # cleanup regex targets the BASE (non-dotted) tag for regular entries
+            cleanup_re = re.compile(
+                re.escape(header) + r".*?" + re.escape(footer),
                 flags=re.DOTALL,
             )
 
@@ -241,11 +243,11 @@ class LorebookPlugin(Star):
                 "footer": footer,
                 "header_text": header_text,
                 "entries": entries,
-                # 💜 variant for cleanup
+                # 💜 variant for stay entries
                 "p_tag_name": p_tag_name,
                 "p_header": p_header,
                 "p_footer": p_footer,
-                "p_cleanup_re": p_cleanup_re,
+                "cleanup_re": cleanup_re,
             })
 
             logger.info(
@@ -421,17 +423,17 @@ class LorebookPlugin(Star):
         return cleaned.strip()
 
     def _clean_contexts(self, req: ProviderRequest) -> int:
-        """从 ProviderRequest 的所有位置中清除上一轮注入的 💜 标签。
+        """从 ProviderRequest 的所有位置中清除上一轮注入的普通条目标签。
 
-        只清理带 💜 后缀的标签；stay 条目使用原始标签名，
+        只清理原始（无点后缀）标签；stay 条目使用带点后缀的标签名，
         不会被匹配到，因此自然留驻在上下文历史中。
         """
         removed = 0
 
         for lb in self._lorebooks:
-            header = lb["p_header"]
-            footer = lb["p_footer"]
-            cleanup_re = lb["p_cleanup_re"]
+            header = lb["header"]
+            footer = lb["footer"]
+            cleanup_re = lb["cleanup_re"]
 
             if hasattr(req, "system_prompt") and req.system_prompt:
                 if (
@@ -592,8 +594,8 @@ class LorebookPlugin(Star):
         [注入阶段] priority=-498，在所有其他插件之后执行。
 
         扫描当前用户消息，匹配各世界书条目，将命中内容注入到指定位置。
-        stay 条目使用原始标签注入一次后留驻；普通条目使用 💜
-        后缀标签，每轮清理后重新注入。
+        普通条目使用原始标签，每轮清理后重新注入；stay 条目使用
+        💜 后缀标签注入一次后留驻。
         """
         if not self._lorebooks:
             return
@@ -668,7 +670,7 @@ class LorebookPlugin(Star):
                                 c = msg.get("content", "")
                                 if isinstance(c, str):
                                     ctx_text += c
-                    if lb["header"] not in ctx_text:
+                    if lb["p_header"] not in ctx_text:
                         purged = {
                             k for k in stayed_set
                             if k.startswith(f"{book_name}:")
@@ -696,7 +698,7 @@ class LorebookPlugin(Star):
 
                 book_prefix = f"{book_name}:"
 
-                # 注入 stay 条目（原始标签，注入一次后留驻）
+                # 注入 stay 条目（💜 标签，注入一次后留驻）
                 if stay_entries:
                     first_stay = not any(
                         k.startswith(book_prefix)
@@ -707,8 +709,8 @@ class LorebookPlugin(Star):
                     )
                     injection = self._format_injection(
                         stay_entries,
-                        lb["header"],
-                        lb["footer"],
+                        lb["p_header"],
+                        lb["p_footer"],
                         lb["header_text"] if first_stay else "",
                     )
                     self._inject_text(req, injection, lb["position"])
@@ -719,7 +721,7 @@ class LorebookPlugin(Star):
                         f"{len(stay_entries)} 个条目: {names}"
                     )
 
-                # 注入 regular 条目（💜 标签，每轮清理重注入）
+                # 注入 regular 条目（原始标签，每轮清理重注入）
                 if regular_entries:
                     # 同书已有留驻内容时不再重复 header_text
                     book_has_stayed = any(
@@ -728,8 +730,8 @@ class LorebookPlugin(Star):
                     )
                     injection = self._format_injection(
                         regular_entries,
-                        lb["p_header"],
-                        lb["p_footer"],
+                        lb["header"],
+                        lb["footer"],
                         "" if book_has_stayed else lb["header_text"],
                     )
                     self._inject_text(req, injection, lb["position"])
