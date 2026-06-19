@@ -1,4 +1,9 @@
 {
+    "initial_context_count": {
+        "description": "预设对话带来的初始 context 条数（用于新窗口检测：当 context 条数 ≤ 此值时视为新窗口，重置冷却/轮次/留驻状态）",
+        "type": "int",
+        "default": 2
+    },
     "lorebooks_json": {
         "description": "世界书 JSON 配置",
         "type": "text",
