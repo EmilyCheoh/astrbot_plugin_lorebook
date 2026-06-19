@@ -48,6 +48,8 @@ class LorebookPlugin(Star):
         # cooldown state: turn-based
         self._session_turns: dict[str, int] = {}
         self._cooldown_state: dict[str, dict[str, int]] = {}
+        # window-reset detection: last seen context length per session
+        self._last_ctx_len: dict[str, int] = {}
         # stay state: tracks which stay entries have already been injected
         # {session_id: {book_name:entry_name, ...}}
         self._stayed: dict[str, set[str]] = {}
@@ -606,6 +608,22 @@ class LorebookPlugin(Star):
                 return
 
             session_id = event.unified_msg_origin or "unknown"
+            logger.info(f"世界书插件 [DEBUG]: session_id={session_id}")
+
+            # 窗口重置检测：context 长度缩短 → 新窗口，清除冷却状态
+            ctx_len = len(req.contexts) if req.contexts else 0
+            prev_ctx_len = self._last_ctx_len.get(session_id, 0)
+            if ctx_len < prev_ctx_len:
+                self._session_turns.pop(session_id, None)
+                self._cooldown_state.pop(session_id, None)
+                self._stayed.pop(session_id, None)
+                logger.info(
+                    f"世界书插件 [窗口重置]: "
+                    f"检测到上下文长度缩短 ({prev_ctx_len} → {ctx_len})，"
+                    f"已重置会话 {session_id} 的冷却/轮次/留驻状态"
+                )
+            self._last_ctx_len[session_id] = ctx_len
+
             stayed_set = self._stayed.setdefault(session_id, set())
 
             # 每条用户消息 = 一轮，无论内容是否命中任何条目
@@ -734,5 +752,6 @@ class LorebookPlugin(Star):
         self._lorebooks = []
         self._session_turns = {}
         self._cooldown_state = {}
+        self._last_ctx_len = {}
         self._stayed = {}
         logger.info("世界书插件已停止")
