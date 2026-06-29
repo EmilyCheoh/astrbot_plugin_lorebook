@@ -1,17 +1,18 @@
 """
 Lorebook - 世界书插件
 
-基于正则关键词匹配的轻量世界书实现。：
-1. 清理上一轮注入到对话历史中的世界书标签
+基于正则关键词匹配的轻量世界书实现：
+1. 清理上一轮注入到对话历史中的世界书标签和认知提示
 2. 扫描当前用户消息，对所有已启用世界书的已启用条目做正则匹配
 3. 对命中条目做 RAG 去重：若条目内容已被 RAG 注入到 prompt 中则跳过
-4. 将剩余条目按 priority 升序排列，拼装后注入到指定位置
+4. 将剩余条目按 priority 升序排列，拼装后注入到用户消息之后
+5. 若配置了认知提示模板，将提示文本拼在世界书标签的正前方
 
 每本世界书通过 AstrBot 管理面板配置（template_list），支持动态添加/编辑/删除。
 
 与 FirstWindowInject / PromptTags / LivingMemory 兼容：
 - 清理阶段 priority=3，在 FirstWindowInject(2) 之前执行
-- 注入阶段 priority=-498，在 FirstWindowInject(-499) 和 PromptTags(-500) 之后执行
+- 注入阶段 priority=-498，在 FirstWindowInject(-499) 和 PromptTags(-500) 之前执行
 - 使用独立的标签名称（默认 Additional-Info），不会与其他插件的正则交叉匹配
 
 F(A) = A(F)
@@ -28,14 +29,12 @@ from astrbot.api.star import Context, Star, register
 
 TAG_NAME_INVALID = re.compile(r"[<>\n\r]")
 
-VALID_POSITIONS = ("user_message_before", "user_message_after", "system_prompt")
-
 
 @register(
     "Lorebook",
     "FelisAbyssalis",
     "基于正则关键词匹配的世界书插件 - 当用户消息命中条目关键词时自动注入对应内容",
-    "2.3.0",
+    "2.4.0",
     "https://github.com/EmilyCheoh/astrbot_plugin_lorebook",
 )
 class LorebookPlugin(Star):
@@ -53,6 +52,17 @@ class LorebookPlugin(Star):
         # stay state: tracks which stay entries have already been injected
         # {session_id: {book_name:entry_name, ...}}
         self._stayed: dict[str, set[str]] = {}
+
+        # 认知提示
+        self._cognition_note_enabled: bool = bool(
+            config.get("cognition_note_enabled", False)
+        )
+        self._cognition_note_template: str = str(
+            config.get("cognition_note_template", "")
+        ).strip()
+        # 上一轮注入的认知提示文本，用于下轮清理
+        self._last_cognition_notes: dict[str, str] = {}
+
         self._load_lorebooks()
 
         if self._lorebooks:
@@ -111,23 +121,22 @@ class LorebookPlugin(Star):
             if not book_name:
                 book_name = f"lorebook_{bi}"
 
-            # 注入位置
-            pos = str(book.get("injection_position", "user_message_after")).strip()
-            position = pos if pos in VALID_POSITIONS else "user_message_after"
+            # 注入位置：始终使用 user_message_after（忽略 JSON 中的配置值）
 
             # XML 标签名
             tag_name = str(book.get("tag_name", "Additional-Info")).strip()
             if not tag_name or TAG_NAME_INVALID.search(tag_name):
                 logger.warning(
                     f"世界书插件 [{book_name}]: "
-                    f"标签名称为空或包含非法字符 (<, >, 换行)，回退到默认值 Additional-Info"
+                    f"标签名称为空或包含非法字符 (<, >, 换行)，"
+                    f"回退到默认值 Additional-Info"
                 )
                 tag_name = "Additional-Info"
 
             header = f"<{tag_name}>"
             footer = f"</{tag_name}>"
 
-            # 💜 variant: used for stay entries (persists across turns)
+            # variant: used for stay entries (persists across turns)
             p_tag_name = f"{tag_name}."
             p_header = f"<{p_tag_name}>"
             p_footer = f"</{p_tag_name}>"
@@ -203,9 +212,13 @@ class LorebookPlugin(Star):
                 # 链接条目名
                 links_raw = entry_obj.get("links", [])
                 if isinstance(links_raw, str):
-                    links = [s.strip() for s in links_raw.split(",") if s.strip()]
+                    links = [
+                        s.strip() for s in links_raw.split(",") if s.strip()
+                    ]
                 elif isinstance(links_raw, list):
-                    links = [str(s).strip() for s in links_raw if str(s).strip()]
+                    links = [
+                        str(s).strip() for s in links_raw if str(s).strip()
+                    ]
                 else:
                     links = []
 
@@ -239,13 +252,12 @@ class LorebookPlugin(Star):
 
             self._lorebooks.append({
                 "name": book_name,
-                "position": position,
                 "tag_name": tag_name,
                 "header": header,
                 "footer": footer,
                 "header_text": header_text,
                 "entries": entries,
-                # 💜 variant for stay entries
+                # variant for stay entries
                 "p_tag_name": p_tag_name,
                 "p_header": p_header,
                 "p_footer": p_footer,
@@ -254,7 +266,7 @@ class LorebookPlugin(Star):
 
             logger.info(
                 f"世界书插件 [{book_name}]: 已加载 {len(entries)} 个条目 "
-                f"(标签: {tag_name}, 位置: {position})"
+                f"(标签: {tag_name})"
             )
 
         logger.info(f"世界书插件: 共加载 {len(self._lorebooks)} 本世界书")
@@ -536,29 +548,88 @@ class LorebookPlugin(Star):
         return removed
 
     # -------------------------------------------------------------------
+    # 认知提示清理
+    # -------------------------------------------------------------------
+
+    @staticmethod
+    def _strip_note(text: str, note: str) -> str:
+        """从字符串中移除认知提示文本。"""
+        cleaned = text.replace(note, "")
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+        return cleaned.strip()
+
+    def _clean_cognition_note(
+        self, req: ProviderRequest, session_id: str
+    ) -> int:
+        """从 ProviderRequest 中清除上一轮注入的认知提示。
+
+        使用精确子串匹配（与 PromptTags 清理声明的方式一致）。
+        """
+        note = self._last_cognition_notes.pop(session_id, "")
+        if not note:
+            return 0
+
+        removed = 0
+
+        # 清理 prompt
+        if hasattr(req, "prompt") and isinstance(req.prompt, str):
+            if note in req.prompt:
+                req.prompt = self._strip_note(req.prompt, note)
+                removed += 1
+
+        # 清理 contexts
+        if hasattr(req, "contexts") and req.contexts:
+            for i, msg in enumerate(req.contexts):
+                if isinstance(msg, str) and note in msg:
+                    cleaned = self._strip_note(msg, note)
+                    req.contexts[i] = cleaned if cleaned else ""
+                    removed += 1
+                elif isinstance(msg, dict):
+                    content = msg.get("content", "")
+                    if isinstance(content, str) and note in content:
+                        cleaned = self._strip_note(content, note)
+                        msg_copy = msg.copy()
+                        msg_copy["content"] = cleaned
+                        req.contexts[i] = msg_copy
+                        removed += 1
+                    elif isinstance(content, list):
+                        for j, part in enumerate(content):
+                            if (
+                                isinstance(part, dict)
+                                and part.get("type") == "text"
+                                and isinstance(part.get("text"), str)
+                                and note in part["text"]
+                            ):
+                                cleaned = self._strip_note(
+                                    part["text"], note
+                                )
+                                part_copy = part.copy()
+                                part_copy["text"] = cleaned
+                                content[j] = part_copy
+                                removed += 1
+
+        return removed
+
+    # -------------------------------------------------------------------
     # 注入辅助
     # -------------------------------------------------------------------
 
-    def _inject_text(
-        self, req: ProviderRequest, text: str, position: str
-    ) -> None:
-        """将文本注入到配置指定的位置。"""
-        if position == "user_message_before":
-            req.prompt = text + "\n\n" + (req.prompt or "")
+    @staticmethod
+    def _inject_text(req: ProviderRequest, text: str) -> None:
+        """将文本注入到用户消息之后。
 
-        elif position == "system_prompt":
-            req.system_prompt = (req.system_prompt or "") + "\n\n" + text
-
-        else:  # user_message_after
-            prompt = req.prompt or ""
-            rag_marker = "<RAG-Faiss-Memory>"
-            rag_pos = prompt.find(rag_marker)
-            if rag_pos > 0:
-                before_rag = prompt[:rag_pos].rstrip()
-                from_rag = prompt[rag_pos:]
-                req.prompt = before_rag + "\n\n" + text + "\n\n" + from_rag
-            else:
-                req.prompt = prompt + "\n\n" + text
+        若 LivingMemory 已将 <RAG-Faiss-Memory> 注入到 prompt 末尾，
+        则将文本插入到 RAG 标签前面。
+        """
+        prompt = req.prompt or ""
+        rag_marker = "<RAG-Faiss-Memory>"
+        rag_pos = prompt.find(rag_marker)
+        if rag_pos > 0:
+            before_rag = prompt[:rag_pos].rstrip()
+            from_rag = prompt[rag_pos:]
+            req.prompt = before_rag + "\n\n" + text + "\n\n" + from_rag
+        else:
+            req.prompt = prompt + "\n\n" + text
 
     # -------------------------------------------------------------------
     # 钩子
@@ -572,19 +643,20 @@ class LorebookPlugin(Star):
         [清理阶段] priority=3，在所有其他插件之前执行。
 
         从 req.prompt / req.system_prompt / req.contexts 中清除
-        上一轮注入的世界书标签。
+        上一轮注入的世界书标签和认知提示。
         """
         if not self._lorebooks:
             return
 
         try:
-            removed = self._clean_contexts(req)
-            if removed > 0:
-                session_id = event.unified_msg_origin or "unknown"
-                # logger.info(
-                #     f"世界书插件 [清理]: "
-                #     f"已清理 {removed} 处历史注入"
-                # )
+            session_id = event.unified_msg_origin or "unknown"
+
+            # 清理认知提示
+            self._clean_cognition_note(req, session_id)
+
+            # 清理世界书标签
+            self._clean_contexts(req)
+
         except Exception as e:
             logger.error(f"世界书插件 [清理]: {e}", exc_info=True)
 
@@ -593,11 +665,12 @@ class LorebookPlugin(Star):
         self, event: AstrMessageEvent, req: ProviderRequest
     ):
         """
-        [注入阶段] priority=-498，在所有其他插件之后执行。
+        [注入阶段] priority=-498，在 PromptTags(-500) 之前执行。
 
-        扫描当前用户消息，匹配各世界书条目，将命中内容注入到指定位置。
-        普通条目使用原始标签，每轮清理后重新注入；stay 条目使用
-        💜 后缀标签注入一次后留驻。
+        扫描当前用户消息，匹配各世界书条目，收集所有命中内容后
+        一次性注入到用户消息之后。普通条目使用原始标签，每轮清理后
+        重新注入；stay 条目使用后缀标签注入一次后留驻。
+        若配置了认知提示，将提示文本拼在世界书标签的正前方。
         """
         if not self._lorebooks:
             return
@@ -616,6 +689,7 @@ class LorebookPlugin(Star):
                 self._session_turns.pop(session_id, None)
                 self._cooldown_state.pop(session_id, None)
                 self._stayed.pop(session_id, None)
+                self._last_cognition_notes.pop(session_id, None)
                 logger.info(
                     f"世界书插件 [窗口已重置]"
                 )
@@ -625,6 +699,10 @@ class LorebookPlugin(Star):
             # 每条用户消息 = 一轮，无论内容是否命中任何条目
             turn = self._session_turns.get(session_id, 0) + 1
             self._session_turns[session_id] = turn
+
+            # 收集所有世界书的注入文本和认知标签名
+            injection_parts: list[str] = []
+            cognition_tag_names: list[str] = []
 
             for lb in self._lorebooks:
                 book_name = lb["name"]
@@ -671,7 +749,10 @@ class LorebookPlugin(Star):
                 if not matched:
                     continue
 
-                # 第五步：分流 stay vs regular
+                # 记录本书的 tag name 用于认知提示
+                cognition_tag_names.append(lb["tag_name"])
+
+                # 第五步：分流 stay vs regular，收集注入文本
                 stay_entries: list[dict[str, Any]] = []
                 regular_entries: list[dict[str, Any]] = []
 
@@ -685,25 +766,15 @@ class LorebookPlugin(Star):
                     else:
                         regular_entries.append(entry)
 
-                # 确定注入顺序：stay 始终出现在 regular 前面
-                # - append 类位置 (user_message_after, system_prompt)：
-                #   先注入 stay，再注入 regular
-                # - prepend 类位置 (user_message_before)：
-                #   先注入 regular，再注入 stay（后 prepend 的在最前）
-                prepend = lb["position"] == "user_message_before"
-
-                def _inject_stay() -> None:
-                    if not stay_entries:
-                        return
-                    # 每个 stay 注入都携带 header_text，保证自包含——
-                    # stay 条目是少数且注入后不再重复，轻度冗余可接受
+                # stay 在前，regular 在后
+                if stay_entries:
                     injection = self._format_injection(
                         stay_entries,
                         lb["p_header"],
                         lb["p_footer"],
                         lb["header_text"],
                     )
-                    self._inject_text(req, injection, lb["position"])
+                    injection_parts.append(injection)
 
                     names = [e["name"] for e in stay_entries]
                     logger.info(
@@ -711,18 +782,14 @@ class LorebookPlugin(Star):
                         f"{len(stay_entries)} 个条目: {names}"
                     )
 
-                def _inject_regular() -> None:
-                    if not regular_entries:
-                        return
-                    # 同轮有 stay 条目同时注入时，header_text 已由 stay 标签携带，
-                    # 不再重复；否则 regular 自行附带 header_text
+                if regular_entries:
                     injection = self._format_injection(
                         regular_entries,
                         lb["header"],
                         lb["footer"],
                         "" if stay_entries else lb["header_text"],
                     )
-                    self._inject_text(req, injection, lb["position"])
+                    injection_parts.append(injection)
 
                     names = [e["name"] for e in regular_entries]
                     logger.info(
@@ -730,12 +797,33 @@ class LorebookPlugin(Star):
                         f"{len(regular_entries)} 个条目: {names}"
                     )
 
-                if prepend:
-                    _inject_regular()
-                    _inject_stay()
-                else:
-                    _inject_stay()
-                    _inject_regular()
+            if not injection_parts:
+                return
+
+            # 认知提示：拼在所有世界书标签的正前方
+            if (
+                self._cognition_note_enabled
+                and self._cognition_note_template
+                and cognition_tag_names
+            ):
+                # 去重并保持触发顺序
+                seen: set[str] = set()
+                unique_names: list[str] = []
+                for name in cognition_tag_names:
+                    if name not in seen:
+                        seen.add(name)
+                        unique_names.append(name)
+
+                tag_list = ", ".join(f"`{n}`" for n in unique_names)
+                note = self._cognition_note_template.replace(
+                    "{tag_name}", tag_list
+                )
+                injection_parts.insert(0, note)
+                self._last_cognition_notes[session_id] = note
+
+            # 一次性注入
+            combined = "\n\n".join(injection_parts)
+            self._inject_text(req, combined)
 
         except Exception as e:
             logger.error(f"世界书插件 [注入]: {e}", exc_info=True)
@@ -749,4 +837,5 @@ class LorebookPlugin(Star):
         self._session_turns = {}
         self._cooldown_state = {}
         self._stayed = {}
+        self._last_cognition_notes = {}
         logger.info("世界书插件已停止")

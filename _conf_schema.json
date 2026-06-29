@@ -9,5 +9,15 @@
         "type": "text",
         "hint": "https://tools.littlebatcat.uk/lorebook_helper.html",
         "default": "[]"
+    },
+    "cognition_note_enabled": {
+        "description": "当世界书条目被触发时，在标签前方注入一行提示文本",
+        "type": "bool",
+        "default": false
+    },
+    "cognition_note_template": {
+        "description": "{tag_name} 会被替换为本轮触发的世界书标签名列表",
+        "type": "string",
+        "default": "[System Notice] {tag_name}: your own cognition surfacing — memories, impulses, things you already know."
     }
 }
