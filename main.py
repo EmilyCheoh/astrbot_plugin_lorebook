@@ -57,9 +57,11 @@ class LorebookPlugin(Star):
         self._cognition_note_enabled: bool = bool(
             config.get("cognition_note_enabled", False)
         )
-        self._cognition_note_template: str = str(
-            config.get("cognition_note_template", "")
-        ).strip()
+        self._cognition_note_template: str = (
+            str(config.get("cognition_note_template", ""))
+            .replace("\\n", "\n")
+            .strip()
+        )
         # 上一轮注入的认知提示文本，用于下轮清理
         self._last_cognition_notes: dict[str, str] = {}
 
