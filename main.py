@@ -28,6 +28,7 @@ from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star, register
 
 TAG_NAME_INVALID = re.compile(r"[<>\n\r]")
+RESEND_PREFIX = "【重发】"
 
 
 @register(
@@ -52,6 +53,9 @@ class LorebookPlugin(Star):
         # stay state: tracks which stay entries have already been injected
         # {session_id: {book_name:entry_name, ...}}
         self._stayed: dict[str, set[str]] = {}
+
+        # 重发状态快照: {session_id: {turn, cooldown, stayed, cognition_note}}
+        self._pre_turn_states: dict[str, dict[str, Any]] = {}
 
         # 认知提示
         self._cognition_note_enabled: bool = bool(
@@ -312,6 +316,55 @@ class LorebookPlugin(Star):
                 state[key] = current_turn
 
         return kept, cooled_down
+
+    # -------------------------------------------------------------------
+    # 重发状态快照
+    # -------------------------------------------------------------------
+
+    def _capture_pre_turn_state(self, session_id: str) -> dict[str, Any]:
+        """捕获当前轮开始前的世界书状态快照（用于重发恢复）。"""
+        return {
+            "turn": self._session_turns.get(session_id),
+            "cooldown": dict(self._cooldown_state.get(session_id, {})),
+            "stayed": set(self._stayed.get(session_id, set())),
+            "cognition_note": self._last_cognition_notes.get(session_id),
+        }
+
+    def _restore_pre_turn_state(self, session_id: str) -> bool:
+        """从快照恢复世界书状态到上一轮开始前。
+
+        Returns:
+            True if restored, False if no snapshot exists.
+        """
+        snapshot = self._pre_turn_states.get(session_id)
+        if snapshot is None:
+            return False
+
+        # turn
+        if snapshot["turn"] is None:
+            self._session_turns.pop(session_id, None)
+        else:
+            self._session_turns[session_id] = snapshot["turn"]
+
+        # cooldown
+        if snapshot["cooldown"]:
+            self._cooldown_state[session_id] = dict(snapshot["cooldown"])
+        else:
+            self._cooldown_state.pop(session_id, None)
+
+        # stayed
+        if snapshot["stayed"]:
+            self._stayed[session_id] = set(snapshot["stayed"])
+        else:
+            self._stayed.pop(session_id, None)
+
+        # cognition_note
+        if snapshot["cognition_note"] is not None:
+            self._last_cognition_notes[session_id] = snapshot["cognition_note"]
+        else:
+            self._last_cognition_notes.pop(session_id, None)
+
+        return True
 
     # -------------------------------------------------------------------
     # 匹配
@@ -684,6 +737,17 @@ class LorebookPlugin(Star):
 
             session_id = event.unified_msg_origin or "unknown"
 
+            # 重发检测
+            is_resend = user_text.startswith(RESEND_PREFIX)
+            if is_resend:
+                user_text = user_text[len(RESEND_PREFIX):]
+                # 清理 req.prompt 中的前缀，确保模型不可见
+                if (
+                    isinstance(req.prompt, str)
+                    and req.prompt.startswith(RESEND_PREFIX)
+                ):
+                    req.prompt = req.prompt[len(RESEND_PREFIX):]
+
             # 窗口重置检测：context 条数 <= 预设初始条数 且存在先前状态 → 新窗口
             ctx_count = len(req.contexts) if req.contexts else 0
             prev_turn = self._session_turns.get(session_id, 0)
@@ -692,9 +756,24 @@ class LorebookPlugin(Star):
                 self._cooldown_state.pop(session_id, None)
                 self._stayed.pop(session_id, None)
                 self._last_cognition_notes.pop(session_id, None)
+                self._pre_turn_states.pop(session_id, None)
                 logger.info(
                     f"世界书插件 [窗口已重置]"
                 )
+
+            # 重发恢复 → 快照保存（顺序不可调换）
+            if is_resend:
+                restored = self._restore_pre_turn_state(session_id)
+                if restored:
+                    logger.info("世界书插件 [重发]: 已恢复上一轮开始前的状态")
+                else:
+                    logger.warning(
+                        "世界书插件 [重发]: 没有可恢复的状态，按普通消息处理"
+                    )
+
+            self._pre_turn_states[session_id] = (
+                self._capture_pre_turn_state(session_id)
+            )
 
             stayed_set = self._stayed.setdefault(session_id, set())
 
@@ -840,4 +919,5 @@ class LorebookPlugin(Star):
         self._cooldown_state = {}
         self._stayed = {}
         self._last_cognition_notes = {}
+        self._pre_turn_states = {}
         logger.info("世界书插件已停止")
