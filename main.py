@@ -814,9 +814,6 @@ class LorebookPlugin(Star):
         cooldown -> constant/links 展开 -> 再次 blocked 过滤 ->
         stay/regular 分流 -> 注入
         """
-        if not self._lorebooks:
-            return
-
         try:
             user_text = event.message_str or ""
             if not user_text:
@@ -839,6 +836,10 @@ class LorebookPlugin(Star):
             if isinstance(req.prompt, str):
                 for control in controls:
                     req.prompt = req.prompt.replace(control, "", 1)
+
+            # 内部标记已清理完毕；无世界书时不需要继续匹配
+            if not self._lorebooks:
+                return
 
             # ------ 编号解析 ------
             if forced_names or blocked_names:
