@@ -3,14 +3,16 @@ Lorebook - 世界书插件
 
 基于正则关键词匹配的轻量世界书实现：
 1. 清理上一轮注入到对话历史中的世界书标签和认知提示
-2. 扫描当前用户消息，对所有已启用世界书的已启用条目做正则匹配
-3. 对命中条目做 RAG 去重：若条目内容已被 RAG 注入到 prompt 中则跳过
-4. 将剩余条目按 priority 升序排列，拼装后注入到用户消息之后
-5. 若配置了认知提示模板，将提示文本拼在世界书标签的正前方
+2. 解析手动控制指令（【注入/插入/不注入/不插入】），从消息和 prompt 中移除控制块
+3. 扫描当前用户消息，对所有已启用世界书条目做正则匹配，合入手动指定条目
+4. 过滤手动禁止条目后执行 cooldown
+5. 展开 constant 和单层 links，再次过滤手动禁止条目
+6. 将剩余条目按 priority 升序排列，拼装后注入到用户消息之后
+7. 若配置了认知提示模板，将提示文本拼在世界书标签的正前方
 
-每本世界书通过 AstrBot 管理面板配置（template_list），支持动态添加/编辑/删除。
+每本世界书通过 AstrBot 管理面板配置（JSON 文本框），支持动态添加/编辑/删除。
 
-与 FirstWindowInject / PromptTags / LivingMemory 兼容：
+与 FirstWindowInject / PromptTags 兼容：
 - 清理阶段 priority=3，在 FirstWindowInject(2) 之前执行
 - 注入阶段 priority=-498，在 FirstWindowInject(-499) 和 PromptTags(-500) 之前执行
 - 使用独立的标签名称（默认 Additional-Info），不会与其他插件的正则交叉匹配
@@ -30,12 +32,18 @@ from astrbot.api.star import Context, Star, register
 TAG_NAME_INVALID = re.compile(r"[<>\n\r]")
 RESEND_PREFIX = "【重发】"
 
+# 手动控制指令
+CONTROL_BODY = r"【(?P<action>注入|插入|不注入|不插入)\s+(?P<names>[^】]+)】"
+CONTROL_AT_START = re.compile(rf"^\s*(?P<control>{CONTROL_BODY})")
+CONTROL_AT_END = re.compile(rf"(?P<control>{CONTROL_BODY})\s*$")
+CONTROL_NAME_SPLIT_RE = re.compile(r"[\s,，]+")
+
 
 @register(
     "Lorebook",
     "FelisAbyssalis",
     "基于正则关键词匹配的世界书插件 - 当用户消息命中条目关键词时自动注入对应内容",
-    "2.4.0",
+    "2.6.0",
     "https://github.com/EmilyCheoh/astrbot_plugin_lorebook",
 )
 class LorebookPlugin(Star):
@@ -367,13 +375,65 @@ class LorebookPlugin(Star):
         return True
 
     # -------------------------------------------------------------------
-    # 匹配
+    # 手动控制指令
     # -------------------------------------------------------------------
 
     @staticmethod
-    def _normalize(text: str) -> str:
-        """将连续空白压缩为单个空格，用于去重比较。"""
-        return re.sub(r"\s+", " ", text).strip()
+    def _extract_manual_controls(
+        text: str,
+    ) -> tuple[str, set[str], set[str], list[str]]:
+        """从用户消息首尾提取手动控制指令。
+
+        只解析位于正文开头或结尾的完整控制块。允许两端各有控制块，
+        也允许同一端连续出现多个控制块。正文中间出现的相似文本按
+        普通正文保留。
+
+        Returns:
+            (clean_text, forced_names, blocked_names, removed_controls)
+        """
+        working = text
+        forced: set[str] = set()
+        blocked: set[str] = set()
+        removed: list[str] = []
+
+        def record(match: re.Match) -> None:
+            action = match.group("action")
+            names = {
+                name
+                for name in CONTROL_NAME_SPLIT_RE.split(
+                    match.group("names").strip()
+                )
+                if name
+            }
+            if action in ("注入", "插入"):
+                forced.update(names)
+            else:
+                blocked.update(names)
+            removed.append(match.group("control"))
+
+        while True:
+            changed = False
+
+            start_match = CONTROL_AT_START.match(working)
+            if start_match:
+                record(start_match)
+                working = working[start_match.end():]
+                changed = True
+
+            end_match = CONTROL_AT_END.search(working)
+            if end_match:
+                record(end_match)
+                working = working[:end_match.start()]
+                changed = True
+
+            if not changed:
+                break
+
+        return working.strip(), forced, blocked, removed
+
+    # -------------------------------------------------------------------
+    # 匹配
+    # -------------------------------------------------------------------
 
     @staticmethod
     def _regex_match_entries(
@@ -389,24 +449,38 @@ class LorebookPlugin(Star):
         return matched
 
     @staticmethod
+    def _dedupe_entries(
+        entries: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """按条目名去重，保持输入顺序。"""
+        seen: set[str] = set()
+        result: list[dict[str, Any]] = []
+        for entry in entries:
+            name = entry["name"]
+            if name not in seen:
+                seen.add(name)
+                result.append(entry)
+        return result
+
+    @staticmethod
     def _expand_matches(
-        regex_matched: list[dict[str, Any]],
+        seed_entries: list[dict[str, Any]],
         all_entries: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        """在 regex 命中基础上追加 constant 条目和 links，按 priority 升序排列。
+        """在 seed 条目基础上追加 constant 条目和 links，按 priority 升序排列。
 
-        1. 若有任何条目命中，则追加所有 constant=True 的条目
+        1. 若有任何 seed 条目，则追加所有 constant=True 的条目
         2. 遍历已命中条目的 links 列表，追加被引用的条目（单层，不递归）
         """
-        if not regex_matched:
+        if not seed_entries:
             return []
 
         entry_by_name: dict[str, dict[str, Any]] = {
             e["name"]: e for e in all_entries
         }
 
-        matched_names: set[str] = {e["name"] for e in regex_matched}
-        final: list[dict[str, Any]] = list(regex_matched)
+        matched_names: set[str] = {e["name"] for e in seed_entries}
+        final: list[dict[str, Any]] = list(seed_entries)
 
         # 1) 追加常驻条目
         for entry in all_entries:
@@ -432,31 +506,59 @@ class LorebookPlugin(Star):
 
         return final
 
-    def _dedup_against_rag(
-        self,
-        matched: list[dict[str, Any]],
-        prompt: str,
-    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        """过滤掉已被 RAG 注入到 prompt 中的条目。
+    # -------------------------------------------------------------------
+    # 编号与查询
+    # -------------------------------------------------------------------
 
-        Returns:
-            (kept, skipped) — 保留的条目列表和被跳过的条目列表。
-        """
-        if not prompt:
-            return matched, []
+    def _indexed_entries(self):
+        """按加载顺序为所有条目生成全局连续编号（从 1 开始）。"""
+        index = 1
+        for book in self._lorebooks:
+            for entry in book["entries"]:
+                yield index, book, entry
+                index += 1
 
-        normalized_prompt = self._normalize(prompt)
+    def _format_lorebook_overview(self) -> str:
+        """格式化世界书条目总览。"""
+        if not self._lorebooks:
+            return "当前没有已加载的世界书条目。"
 
-        kept: list[dict[str, Any]] = []
-        skipped: list[dict[str, Any]] = []
+        lines: list[str] = ["📚 世界书列表"]
+        current_book_name = None
 
-        for entry in matched:
-            if self._normalize(entry["content"]) in normalized_prompt:
-                skipped.append(entry)
-            else:
-                kept.append(entry)
+        for idx, book, entry in self._indexed_entries():
+            if book["name"] != current_book_name:
+                current_book_name = book["name"]
+                lines.append(f"\n《{current_book_name}》")
+            lines.append(f"{idx}. {entry['name']}")
 
-        return kept, skipped
+        return "\n".join(lines)
+
+    def _format_lorebook_entry_detail(self, index: int) -> str | None:
+        """格式化指定编号条目的详细信息。"""
+        for idx, book, entry in self._indexed_entries():
+            if idx == index:
+                regex_patterns = [p.pattern for p in entry["keywords"]]
+                lines = [
+                    f"📖 条目详情 #{idx}",
+                    "",
+                    f"世界书: {book['name']}",
+                    f"编号: {idx}",
+                    f"条目名: {entry['name']}",
+                    f"Regex: {regex_patterns}",
+                    f"Priority: {entry['priority']}",
+                    f"Constant: {entry['constant']}",
+                    f"Stay: {entry['stay']}",
+                    f"Cooldown: {entry['cooldown']}",
+                    f"Links: {entry['links']}",
+                    f"Tag Name: {book['tag_name']}",
+                    f"Header Text: {book['header_text'] or '(无)'}",
+                    "",
+                    "Content:",
+                    entry["content"],
+                ]
+                return "\n".join(lines)
+        return None
 
     # -------------------------------------------------------------------
     # 格式化
@@ -616,10 +718,7 @@ class LorebookPlugin(Star):
     def _clean_cognition_note(
         self, req: ProviderRequest, session_id: str
     ) -> int:
-        """从 ProviderRequest 中清除上一轮注入的认知提示。
-
-        使用精确子串匹配（与 PromptTags 清理声明的方式一致）。
-        """
+        """从 ProviderRequest 中清除上一轮注入的认知提示。"""
         note = self._last_cognition_notes.pop(session_id, "")
         if not note:
             return 0
@@ -671,20 +770,9 @@ class LorebookPlugin(Star):
 
     @staticmethod
     def _inject_text(req: ProviderRequest, text: str) -> None:
-        """将文本注入到用户消息之后。
-
-        若 LivingMemory 已将 <RAG-Faiss-Memory> 注入到 prompt 末尾，
-        则将文本插入到 RAG 标签前面。
-        """
+        """将文本追加到用户消息之后。"""
         prompt = req.prompt or ""
-        rag_marker = "<RAG-Faiss-Memory>"
-        rag_pos = prompt.find(rag_marker)
-        if rag_pos > 0:
-            before_rag = prompt[:rag_pos].rstrip()
-            from_rag = prompt[rag_pos:]
-            req.prompt = before_rag + "\n\n" + text + "\n\n" + from_rag
-        else:
-            req.prompt = prompt + "\n\n" + text
+        req.prompt = f"{prompt}\n\n{text}" if prompt else text
 
     # -------------------------------------------------------------------
     # 钩子
@@ -722,10 +810,9 @@ class LorebookPlugin(Star):
         """
         [注入阶段] priority=-498，在 PromptTags(-500) 之前执行。
 
-        扫描当前用户消息，匹配各世界书条目，收集所有命中内容后
-        一次性注入到用户消息之后。普通条目使用原始标签，每轮清理后
-        重新注入；stay 条目使用后缀标签注入一次后留驻。
-        若配置了认知提示，将提示文本拼在世界书标签的正前方。
+        清理 -> 解析手动控制 -> regex + 手动 seed -> blocked 过滤 ->
+        cooldown -> constant/links 展开 -> 再次 blocked 过滤 ->
+        stay/regular 分流 -> 注入
         """
         if not self._lorebooks:
             return
@@ -737,18 +824,68 @@ class LorebookPlugin(Star):
 
             session_id = event.unified_msg_origin or "unknown"
 
-            # 重发检测
+            # ------ 重发检测 ------
             is_resend = user_text.startswith(RESEND_PREFIX)
             if is_resend:
-                user_text = user_text[len(RESEND_PREFIX):]
-                # 清理 req.prompt 中的前缀，确保模型不可见
-                if (
-                    isinstance(req.prompt, str)
-                    and req.prompt.startswith(RESEND_PREFIX)
-                ):
-                    req.prompt = req.prompt[len(RESEND_PREFIX):]
+                user_text = user_text.removeprefix(RESEND_PREFIX)
+                if isinstance(req.prompt, str):
+                    req.prompt = req.prompt.replace(RESEND_PREFIX, "", 1)
 
-            # 窗口重置检测：context 条数 <= 预设初始条数 且存在先前状态 → 新窗口
+            # ------ 手动控制指令 ------
+            user_text, forced_names, blocked_names, controls = (
+                self._extract_manual_controls(user_text)
+            )
+
+            if isinstance(req.prompt, str):
+                for control in controls:
+                    req.prompt = req.prompt.replace(control, "", 1)
+
+            # ------ 编号解析 ------
+            if forced_names or blocked_names:
+                index_to_name: dict[int, str] = {
+                    idx: entry["name"]
+                    for idx, _book, entry in self._indexed_entries()
+                }
+
+                def _resolve(names: set[str]) -> set[str]:
+                    resolved: set[str] = set()
+                    for name in names:
+                        if name.isdecimal() and int(name) > 0:
+                            resolved.add(
+                                index_to_name.get(int(name), name)
+                            )
+                        else:
+                            resolved.add(name)
+                    return resolved
+
+                forced_names = {n.lower() for n in _resolve(forced_names)}
+                blocked_names = {n.lower() for n in _resolve(blocked_names)}
+
+                # 记录未知条目名
+                known_names_lower = {
+                    entry["name"].lower()
+                    for book in self._lorebooks
+                    for entry in book["entries"]
+                }
+                unknown = (forced_names | blocked_names) - known_names_lower
+                if unknown:
+                    logger.warning(
+                        f"世界书插件 [手动控制]: "
+                        f"未找到条目: {sorted(unknown)}"
+                    )
+
+                if forced_names:
+                    logger.info(
+                        f"世界书插件 [手动注入]: "
+                        f"{sorted(forced_names)}"
+                    )
+                if blocked_names:
+                    logger.info(
+                        f"世界书插件 [手动禁止]: "
+                        f"{sorted(blocked_names)}"
+                    )
+
+            # ------ 窗口重置检测 ------
             ctx_count = len(req.contexts) if req.contexts else 0
             prev_turn = self._session_turns.get(session_id, 0)
             if prev_turn > 0 and ctx_count <= self._initial_ctx_count:
@@ -757,18 +894,19 @@ class LorebookPlugin(Star):
                 self._stayed.pop(session_id, None)
                 self._last_cognition_notes.pop(session_id, None)
                 self._pre_turn_states.pop(session_id, None)
-                logger.info(
-                    f"世界书插件 [窗口已重置]"
-                )
+                logger.info("世界书插件 [窗口已重置]")
 
-            # 重发恢复 → 快照保存（顺序不可调换）
+            # ------ 重发恢复 -> 快照保存（顺序不可调换） ------
             if is_resend:
                 restored = self._restore_pre_turn_state(session_id)
                 if restored:
-                    logger.info("世界书插件 [重发]: 已恢复上一轮开始前的状态")
+                    logger.info(
+                        "世界书插件 [重发]: 已恢复上一轮开始前的状态"
+                    )
                 else:
                     logger.warning(
-                        "世界书插件 [重发]: 没有可恢复的状态，按普通消息处理"
+                        "世界书插件 [重发]: "
+                        "没有可恢复的状态，按普通消息处理"
                     )
 
             self._pre_turn_states[session_id] = (
@@ -781,23 +919,41 @@ class LorebookPlugin(Star):
             turn = self._session_turns.get(session_id, 0) + 1
             self._session_turns[session_id] = turn
 
-            # 收集所有世界书的注入文本和认知标签名
+            # ------ 收集所有世界书的注入文本和认知标签名 ------
             injection_parts: list[str] = []
             cognition_tag_names: list[str] = []
 
             for lb in self._lorebooks:
                 book_name = lb["name"]
 
-                # 第一步：纯 regex 匹配
+                # 第一步：regex 匹配
                 regex_matched = self._regex_match_entries(
                     user_text, lb["entries"]
                 )
-                if not regex_matched:
+
+                # 第二步：合入手动指定条目
+                manual_entries = [
+                    entry
+                    for entry in lb["entries"]
+                    if entry["name"].lower() in forced_names
+                ]
+
+                seed = self._dedupe_entries(
+                    regex_matched + manual_entries
+                )
+
+                # 第三步：第一次 blocked 过滤（在 cooldown 之前）
+                seed = [
+                    e for e in seed
+                    if e["name"].lower() not in blocked_names
+                ]
+
+                if not seed:
                     continue
 
-                # 第二步：对 regex 命中条目过冷却（stay 条目 cooldown=0，不受影响）
-                regex_matched, cooled = self._apply_cooldown(
-                    regex_matched, book_name, session_id, turn
+                # 第四步：cooldown（stay 条目 cooldown=0，不受影响）
+                seed, cooled = self._apply_cooldown(
+                    seed, book_name, session_id, turn
                 )
 
                 if cooled:
@@ -807,25 +963,17 @@ class LorebookPlugin(Star):
                         f"{[e['name'] for e in cooled]}"
                     )
 
-                if not regex_matched:
+                if not seed:
                     continue
 
-                # 第三步：冷却后有存活 → 展开 constant + links
-                matched = self._expand_matches(
-                    regex_matched, lb["entries"]
-                )
+                # 第五步：展开 constant + links
+                matched = self._expand_matches(seed, lb["entries"])
 
-                # 第四步：去重——跳过已被 RAG 注入的条目
-                matched, skipped = self._dedup_against_rag(
-                    matched, req.prompt or ""
-                )
-
-                if skipped:
-                    logger.info(
-                        f"世界书插件 [{book_name}] [去重]: "
-                        f"跳过 {len(skipped)} 个已被 RAG 覆盖的条目: "
-                        f"{[e['name'] for e in skipped]}"
-                    )
+                # 第六步：第二次 blocked 过滤（拦截展开带出的条目）
+                matched = [
+                    e for e in matched
+                    if e["name"].lower() not in blocked_names
+                ]
 
                 if not matched:
                     continue
@@ -833,7 +981,7 @@ class LorebookPlugin(Star):
                 # 记录本书的 tag name 用于认知提示
                 cognition_tag_names.append(lb["tag_name"])
 
-                # 第五步：分流 stay vs regular，收集注入文本
+                # 第七步：分流 stay vs regular，收集注入文本
                 stay_entries: list[dict[str, Any]] = []
                 regular_entries: list[dict[str, Any]] = []
 
@@ -908,6 +1056,48 @@ class LorebookPlugin(Star):
 
         except Exception as e:
             logger.error(f"世界书插件 [注入]: {e}", exc_info=True)
+
+    # -------------------------------------------------------------------
+    # 查询命令
+    # -------------------------------------------------------------------
+
+    @filter.command_group("lorebook")
+    def lorebook(self):
+        pass
+
+    @lorebook.command("list")
+    async def lorebook_list(self, event: AstrMessageEvent):
+        """列出所有已加载的世界书条目。"""
+        yield event.plain_result(self._format_lorebook_overview())
+
+    @lorebook.command("view")
+    async def lorebook_view(
+        self, event: AstrMessageEvent, index: str = ""
+    ):
+        """查看世界书条目详情。"""
+        raw = index.strip()
+        if not raw:
+            yield event.plain_result(self._format_lorebook_overview())
+            return
+
+        if not raw.isdecimal() or int(raw) <= 0:
+            yield event.plain_result("用法：/lorebook view <编号>")
+            return
+
+        result = self._format_lorebook_entry_detail(int(raw))
+        if result is None:
+            total = sum(
+                len(book["entries"]) for book in self._lorebooks
+            )
+            if total:
+                result = (
+                    f"未找到编号 {raw}；"
+                    f"当前有效编号范围为 1-{total}。"
+                )
+            else:
+                result = "当前没有已加载的世界书条目。"
+
+        yield event.plain_result(result)
 
     # -------------------------------------------------------------------
     # 生命周期
