@@ -187,6 +187,10 @@ class LorebookPlugin(Star):
 
                 regex_raw = self._parse_regex(entry_obj.get("regex", []))
                 if not regex_raw:
+                    logger.warning(
+                        f"世界书插件 [{book_name}/{entry_name}]: "
+                        f"未配置 Regex，跳过此条目⚠️"
+                    )
                     continue
 
                 content = str(entry_obj.get("content", ""))
