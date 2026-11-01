@@ -1066,7 +1066,7 @@ class LorebookPlugin(Star):
     # 查询命令
     # -------------------------------------------------------------------
 
-    @filter.command_group("lorebook")
+    @filter.command_group("lorebook", alias={"lb", "世界书"})
     def lorebook(self):
         pass
 
