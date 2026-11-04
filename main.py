@@ -1084,12 +1084,34 @@ class LorebookPlugin(Star):
         if not raw:
             yield event.plain_result(self._format_lorebook_overview())
             return
+        
+        if raw.isdecimal():
+            if int(raw) <= 0:
+                yield event.plain_result("请输入有效的编号或条目名")
+                return
+            target_index = int(raw)
+        else:
+            matches = [
+                idx
+                for idx, _book, entry in self._indexed_entries()
+                if entry["name"].casefold() == raw.casefold()
+            ]
 
-        if not raw.isdecimal() or int(raw) <= 0:
-            yield event.plain_result("用法：/lorebook view <编号>")
-            return
+            if not matches:
+                yield event.plain_result(f"未找到条目：{raw}")
+                return
 
-        result = self._format_lorebook_entry_detail(int(raw))
+            if len(matches) > 1:
+                yield event.plain_result(
+                    f"找到多个同名条目「{raw}」，请使用编号："
+                    + "、".join(str(idx) for idx in matches)
+                )
+                return
+
+            target_index = matches[0]
+
+        result = self._format_lorebook_entry_detail(target_index)
+
         if result is None:
             total = sum(
                 len(book["entries"]) for book in self._lorebooks
