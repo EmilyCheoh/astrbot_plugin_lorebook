@@ -256,8 +256,19 @@ class LorebookPlugin(Star):
                 if cooldown < 0:
                     cooldown = 0
 
+                # 手动控制别名：一个条目可有多个，多个条目也可共用同一别名。
+                aliases_raw = entry_obj.get("aliases", [])
+                aliases = (
+                    list(dict.fromkeys(
+                        alias.strip() for alias in aliases_raw
+                        if isinstance(alias, str) and alias.strip()
+                    ))
+                    if isinstance(aliases_raw, list) else []
+                )
+
                 entries.append({
                     "name": entry_name,
+                    "aliases": aliases,
                     "keywords": compiled,
                     "content": content,
                     "priority": priority,
@@ -615,6 +626,7 @@ class LorebookPlugin(Star):
                     f"世界书: {book['name']}",
                     f"编号: {idx}",
                     f"条目名: {entry['name']}",
+                    f"Aliases: {entry.get('aliases', [])}",
                     f"Regex: {regex_patterns}",
                     f"Priority: {entry['priority']}",
                     f"Constant: {entry['constant']}",
@@ -911,34 +923,45 @@ class LorebookPlugin(Star):
             if not self._lorebooks:
                 return
 
-            # ------ 编号解析 ------
+            # ------ 手动控制名称 / 别名 / 编号解析 ------
+            forced_entry_ids: set[int] = set()
+            blocked_entry_ids: set[int] = set()
             if forced_names or blocked_names:
-                index_to_name: dict[int, str] = {
-                    idx: entry["name"]
-                    for idx, _book, entry in self._indexed_entries()
+                indexed_entries = list(self._indexed_entries())
+                index_to_name = {
+                    idx: entry["name"] for idx, _book, entry in indexed_entries
                 }
 
-                def _resolve(names: set[str]) -> set[str]:
-                    resolved: set[str] = set()
+                def _resolve(names: set[str]) -> tuple[set[int], set[str]]:
+                    resolved: set[int] = set()
+                    unknown: set[str] = set()
                     for name in names:
+                        # 保持原有编号语义：编号先解析为正式名称，再匹配同名条目。
                         if name.isdecimal() and int(name) > 0:
-                            resolved.add(
-                                index_to_name.get(int(name), name)
-                            )
+                            target = index_to_name.get(int(name), name).casefold()
+                            matched = [
+                                entry for _idx, _book, entry in indexed_entries
+                                if entry["name"].casefold() == target
+                            ]
                         else:
-                            resolved.add(name)
-                    return resolved
+                            target = name.casefold()
+                            matched = [
+                                entry for _idx, _book, entry in indexed_entries
+                                if entry["name"].casefold() == target
+                                or any(
+                                    alias.casefold() == target
+                                    for alias in entry["aliases"]
+                                )
+                            ]
+                        if matched:
+                            resolved.update(id(entry) for entry in matched)
+                        else:
+                            unknown.add(name)
+                    return resolved, unknown
 
-                forced_names = {n.lower() for n in _resolve(forced_names)}
-                blocked_names = {n.lower() for n in _resolve(blocked_names)}
-
-                # 记录未知条目名
-                known_names_lower = {
-                    entry["name"].lower()
-                    for book in self._lorebooks
-                    for entry in book["entries"]
-                }
-                unknown = (forced_names | blocked_names) - known_names_lower
+                forced_entry_ids, unknown_forced = _resolve(forced_names)
+                blocked_entry_ids, unknown_blocked = _resolve(blocked_names)
+                unknown = unknown_forced | unknown_blocked
                 if unknown:
                     logger.warning(
                         f"世界书插件 [手动控制]: "
@@ -1006,7 +1029,7 @@ class LorebookPlugin(Star):
                 manual_entries = [
                     entry
                     for entry in lb["entries"]
-                    if entry["name"].lower() in forced_names
+                    if id(entry) in forced_entry_ids
                 ]
 
                 seed = self._dedupe_entries(
@@ -1016,7 +1039,7 @@ class LorebookPlugin(Star):
                 # 第三步：第一次 blocked 过滤（在 cooldown 之前）
                 seed = [
                     e for e in seed
-                    if e["name"].lower() not in blocked_names
+                    if id(e) not in blocked_entry_ids
                 ]
 
                 if not seed:
@@ -1043,7 +1066,7 @@ class LorebookPlugin(Star):
                 # 第六步：第二次 blocked 过滤（拦截展开带出的条目）
                 matched = [
                     e for e in matched
-                    if e["name"].lower() not in blocked_names
+                    if id(e) not in blocked_entry_ids
                 ]
 
                 if not matched:
