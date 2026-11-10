@@ -38,6 +38,17 @@ CONTROL_AT_START = re.compile(rf"^\s*(?P<control>{CONTROL_BODY})")
 CONTROL_AT_END = re.compile(rf"(?P<control>{CONTROL_BODY})\s*$")
 CONTROL_NAME_SPLIT_RE = re.compile(r"[\s,，]+")
 
+# /lb check：从原始消息提取多行大括号内容，不使用 AstrBot 压平空白后的命令参数。
+CHECK_COMMAND_RE = re.compile(
+    r"^\s*/(?:lorebook|lb|世界书)\s+check(?=\s|$)(?P<tail>[\s\S]*)$",
+    flags=re.IGNORECASE,
+)
+CHECK_PAYLOAD_RE = re.compile(r"\s*\{([\s\S]*)\}\s*")
+CHECK_USAGE = (
+    "🐈‍⬛ 主人，把想检查的文字放进大括号里交给咪吧：\n"
+    "/lb check {内容}"
+)
+
 
 @register(
     "Lorebook",
@@ -537,6 +548,62 @@ class LorebookPlugin(Star):
             lines.append(f"{idx}. {entry['name']}")
 
         return "\n".join(lines)
+
+    def _format_lorebook_check(self, text: str) -> str:
+        """只读预览：不考虑 cooldown/stay，展示 Regex 及其带出的 Links/Constant。"""
+        entry_index = {
+            id(entry): (idx, book)
+            for idx, book, entry in self._indexed_entries()
+        }
+        direct: list[tuple[int, dict[str, Any], dict[str, Any]]] = []
+        indirect: list[tuple[int, dict[str, Any], dict[str, Any], str]] = []
+
+        for book in self._lorebooks:
+            regex_matches = self._regex_match_entries(text, book["entries"])
+            if not regex_matches:
+                continue
+
+            direct_ids = {id(entry) for entry in regex_matches}
+            for entry in regex_matches:
+                idx, _ = entry_index[id(entry)]
+                direct.append((idx, book, entry))
+
+            # 复用实际注入使用的单层 Links 与同书 Constant 展开规则。
+            for entry in self._expand_matches(regex_matches, book["entries"]):
+                if id(entry) in direct_ids:
+                    continue
+                idx, _ = entry_index[id(entry)]
+                origin = "全局" if entry["constant"] else "Links"
+                indirect.append((idx, book, entry, origin))
+
+        if not direct and not indirect:
+            return "🐈‍⬛ 咪翻遍世界书啦，没有找到匹配的条目。🍃"
+
+        sections: list[str] = []
+        if direct:
+            lines = ["🎯 直接命中"]
+            for idx, book, entry in sorted(direct, key=lambda item: item[0]):
+                lines.append(
+                    f"#{idx} {entry['name']}\n"
+                    f"世界书：{book['name']}\n"
+                    f"Content：\n{entry['content']}"
+                )
+            sections.append("\n\n".join(lines))
+
+        if indirect:
+            lines = ["🔗 间接命中"]
+            for idx, book, entry, origin in sorted(
+                indirect, key=lambda item: item[0]
+            ):
+                lines.append(
+                    f"#{idx} {entry['name']}\n"
+                    f"世界书：{book['name']}\n"
+                    f"Content：\n{entry['content']}\n"
+                    f"来源：{origin}"
+                )
+            sections.append("\n\n".join(lines))
+
+        return "\n\n".join(sections)
 
     def _format_lorebook_entry_detail(self, index: int) -> str | None:
         """格式化指定编号条目的详细信息。"""
@@ -1074,6 +1141,29 @@ class LorebookPlugin(Star):
     async def lorebook_list(self, event: AstrMessageEvent):
         """列出所有已加载的世界书条目。"""
         yield event.plain_result(self._format_lorebook_overview())
+
+    @lorebook.command("check")
+    async def lorebook_check(self, event: AstrMessageEvent):
+        """预览大括号中多行文字能触发的所有世界书条目（不改变对话状态）。"""
+        raw = getattr(event.message_obj, "message_str", None)
+        if not isinstance(raw, str):
+            raw = event.message_str or ""
+
+        command = CHECK_COMMAND_RE.fullmatch(raw)
+        payload_match = (
+            CHECK_PAYLOAD_RE.fullmatch(command.group("tail"))
+            if command else None
+        )
+        if not payload_match:
+            yield event.plain_result(CHECK_USAGE)
+            return
+
+        text = payload_match.group(1)
+        if not text.strip():
+            yield event.plain_result("🐈‍⬛ 主人，大括号里还没有文字哦。🐾")
+            return
+
+        yield event.plain_result(self._format_lorebook_check(text))
 
     @lorebook.command("view")
     async def lorebook_view(
