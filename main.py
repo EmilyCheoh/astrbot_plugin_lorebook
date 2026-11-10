@@ -583,6 +583,7 @@ class LorebookPlugin(Star):
                 lines.append(
                     f"#{idx} {entry['name']}\n"
                     f"世界书：{book['name']}\n"
+                    f"Tag Name：{book['tag_name']}\n"
                     f"Content：\n{entry['content']}"
                 )
             sections.append("\n\n".join(lines))
@@ -595,6 +596,7 @@ class LorebookPlugin(Star):
                 lines.append(
                     f"#{idx} {entry['name']}\n"
                     f"世界书：{book['name']}\n"
+                    f"Tag Name：{book['tag_name']}\n"
                     f"Content：\n{entry['content']}\n"
                     f"来源：{origin}"
                 )
