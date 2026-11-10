@@ -1204,24 +1204,47 @@ class LorebookPlugin(Star):
                 return
             target_index = int(raw)
         else:
-            matches = [
+            # 正式名称优先，保留原有的同名条目查询规则。
+            name_matches = [
                 idx
                 for idx, _book, entry in self._indexed_entries()
                 if entry["name"].casefold() == raw.casefold()
             ]
 
-            if not matches:
-                yield event.plain_result(f"未找到条目：{raw}")
-                return
-
-            if len(matches) > 1:
-                yield event.plain_result(
-                    f"找到多个同名条目「{raw}」，请使用编号："
-                    + "、".join(str(idx) for idx in matches)
-                )
-                return
-
-            target_index = matches[0]
+            if name_matches:
+                if len(name_matches) > 1:
+                    yield event.plain_result(
+                        f"找到多个同名条目「{raw}」，请使用编号："
+                        + "、".join(str(idx) for idx in name_matches)
+                    )
+                    return
+                target_index = name_matches[0]
+            else:
+                # 别名允许重复：返回所有匹配条目的完整详情。
+                alias_matches = [
+                    (idx, entry["name"])
+                    for idx, _book, entry in self._indexed_entries()
+                    if any(
+                        alias.casefold() == raw.casefold()
+                        for alias in entry.get("aliases", [])
+                    )
+                ]
+                if not alias_matches:
+                    yield event.plain_result(f"未找到条目或别名：{raw}")
+                    return
+                if len(alias_matches) > 1:
+                    yield event.plain_result(
+                        f"别名「{raw}」匹配 {len(alias_matches)} 个条目：\n"
+                        + "\n".join(
+                            f"#{idx} {name}" for idx, name in alias_matches
+                        )
+                    )
+                    for idx, _name in alias_matches:
+                        yield event.plain_result(
+                            self._format_lorebook_entry_detail(idx)
+                        )
+                    return
+                target_index = alias_matches[0][0]
 
         result = self._format_lorebook_entry_detail(target_index)
 
