@@ -44,10 +44,7 @@ CHECK_COMMAND_RE = re.compile(
     flags=re.IGNORECASE,
 )
 CHECK_PAYLOAD_RE = re.compile(r"\s*\{([\s\S]*)\}\s*")
-CHECK_USAGE = (
-    "🐈‍⬛ 主人，把想检查的文字放进大括号里交给咪吧：\n"
-    "/lb check {内容}"
-)
+CHECK_USAGE = "🐈‍⬛ 主人，把想检查的文字放进大括号里交给咪吧："
 
 
 @register(
@@ -1156,6 +1153,7 @@ class LorebookPlugin(Star):
         )
         if not payload_match:
             yield event.plain_result(CHECK_USAGE)
+            yield event.plain_result("/lb check {内容}")
             return
 
         text = payload_match.group(1)
