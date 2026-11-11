@@ -23,6 +23,7 @@ F(A) = A(F)
 import base64
 import json
 import re
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -1164,7 +1165,7 @@ class LorebookPlugin(Star):
 
     @lorebook.command("export")
     async def lorebook_export(self, event: AstrMessageEvent):
-        """将配置面板中的完整世界书 JSON 作为 QQ 文件发送。"""
+        """导出配置面板中的完整世界书 JSON 文件。"""
         event.should_call_llm(True)
         try:
             raw_json = self.config.get("lorebooks_json", "[]")
@@ -1172,21 +1173,52 @@ class LorebookPlugin(Star):
                 yield event.plain_result("🐈‍⬛ 世界书 JSON 配置不是文本，导出失败。")
                 return
 
+            file_bytes = raw_json.encode("utf-8")
+
+            # QQ/NapCat 独立容器：复用现有的 Base64 私聊文件上传。
+            if (
+                getattr(event, "bot", None) is not None
+                and event.get_sender_id().isdigit()
+                and not event.get_group_id()
+            ):
+                try:
+                    await event.bot.call_action(
+                        "upload_private_file",
+                        user_id=event.get_sender_id(),
+                        file="base64://" + base64.b64encode(file_bytes).decode("ascii"),
+                        name="lorebooks.json",
+                    )
+                except Exception as exc:
+                    logger.error(
+                        f"世界书插件 [导出]: QQ 文件发送失败: {exc}",
+                        exc_info=True,
+                    )
+                    yield event.plain_result("🐈‍⬛ 世界书导出失败，请查看日志。")
+                return
+
+            # 小窝等平台：发送 AstrBot File 组件，由平台适配器负责展示。
+            # 临时文件会在本条消息处理结束后由 AstrBot 清理。
+            path = None
             try:
-                await event.bot.call_action(
-                    "upload_private_file",
-                    user_id=event.get_sender_id(),
-                    file="base64://" + base64.b64encode(
-                        raw_json.encode("utf-8")
-                    ).decode("ascii"),
-                    name="lorebooks.json",
-                )
-            except Exception as exc:
+                with tempfile.NamedTemporaryFile(
+                    mode="wb", prefix="lorebooks_", suffix=".json", delete=False
+                ) as tmp:
+                    tmp.write(file_bytes)
+                    path = Path(tmp.name)
+                event.track_temporary_local_file(str(path))
+            except OSError as exc:
+                if path is not None:
+                    path.unlink(missing_ok=True)
                 logger.error(
-                    f"世界书插件 [导出]: QQ 文件发送失败: {exc}",
+                    f"世界书插件 [导出]: 创建临时文件失败: {exc}",
                     exc_info=True,
                 )
                 yield event.plain_result("🐈‍⬛ 世界书导出失败，请查看日志。")
+                return
+
+            yield event.chain_result([
+                File(name="lorebooks.json", file=str(path))
+            ])
         finally:
             event.stop_event()
 
