@@ -23,10 +23,12 @@ F(A) = A(F)
 import base64
 import json
 import re
+from pathlib import Path
 from typing import Any
 
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.message_components import File
 from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star, register
 
@@ -1185,6 +1187,118 @@ class LorebookPlugin(Star):
                     exc_info=True,
                 )
                 yield event.plain_result("🐈‍⬛ 世界书导出失败，请查看日志。")
+        finally:
+            event.stop_event()
+
+    @lorebook.command("import", alias={"upload"})
+    async def lorebook_import(self, event: AstrMessageEvent):
+        """从同一条消息的 JSON 附件替换世界书配置。"""
+        event.should_call_llm(True)
+        try:
+            # Den 和正常解析的 QQ 文件都直接在消息链中。
+            attachments = [
+                part for part in event.message_obj.message
+                if isinstance(part, File)
+            ]
+
+            if not attachments:
+                # AstrBot v4.24.5 的 QQ 适配器取文件 URL 时使用
+                # event.message[0] 的 file_id。文字在文件前面时可能漏掉 File，
+                # 因此从原始 OneBot 消息取真正的文件段补救。
+                raw = event.message_obj.raw_message
+                segments = raw.get("message", []) if hasattr(raw, "get") else []
+                files = [
+                    seg.get("data", {}) for seg in segments
+                    if isinstance(seg, dict) and seg.get("type") == "file"
+                ]
+                if len(files) == 1:
+                    data = files[0]
+                    name = str(
+                        data.get("file_name") or data.get("name")
+                        or data.get("file") or "lorebooks.json"
+                    )
+                    url = data.get("url", "")
+                    if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+                        file_id = data.get("file_id")
+                        if not file_id:
+                            yield event.plain_result("🐈‍⬛ 没有取得 QQ 文件 ID，导入失败。")
+                            return
+                        if event.get_group_id():
+                            info = await event.bot.call_action(
+                                "get_group_file_url",
+                                group_id=event.get_group_id(),
+                                file_id=file_id,
+                            )
+                        else:
+                            info = await event.bot.call_action(
+                                "get_private_file_url", file_id=file_id,
+                            )
+                        url = info.get("url", "") if isinstance(info, dict) else ""
+                        if isinstance(info, dict):
+                            name = str(info.get("file_name") or info.get("name") or name)
+                    if not url:
+                        yield event.plain_result("🐈‍⬛ 无法获取 QQ 文件下载地址，导入失败。")
+                        return
+                    attachments = [File(name=name, url=url)]
+                elif len(files) > 1:
+                    yield event.plain_result("🐈‍⬛ 一次只导入一个 JSON 文件哦。")
+                    return
+
+            if len(attachments) != 1:
+                yield event.plain_result("🐈‍⬛ 请把 /lb import 和一个 JSON 文件放在同一条消息里。")
+                return
+
+            attachment = attachments[0]
+            if not (attachment.name or "").lower().endswith(".json"):
+                yield event.plain_result("🐈‍⬛ 请上传 .json 文件。")
+                return
+
+            # Den 的附件由 Den 管理临时文件；QQ 的 URL 下载文件由这里清理。
+            downloaded = bool(attachment.url and not attachment.file_)
+            path = ""
+            try:
+                path = await attachment.get_file()
+                if not path:
+                    raise OSError("文件路径为空")
+                raw_json = Path(path).read_text(encoding="utf-8-sig")
+            finally:
+                if downloaded and path:
+                    Path(path).unlink(missing_ok=True)
+
+            try:
+                books = json.loads(raw_json)
+            except json.JSONDecodeError as exc:
+                yield event.plain_result(f"🐈‍⬛ JSON 格式错误：{exc}")
+                return
+            if not isinstance(books, list) or not all(
+                isinstance(book, dict) for book in books
+            ):
+                yield event.plain_result("🐈‍⬛ 世界书 JSON 顶层应是世界书对象组成的数组。")
+                return
+
+            previous = self.config.get("lorebooks_json", "[]")
+            self.config["lorebooks_json"] = raw_json
+            try:
+                self.config.save_config()
+            except Exception:
+                self.config["lorebooks_json"] = previous
+                raise
+
+            self._load_lorebooks()
+            self._session_turns.clear()
+            self._cooldown_state.clear()
+            self._stayed.clear()
+            self._pre_turn_states.clear()
+            # 保留上一轮认知提示记录，让下次 LLM 清理阶段正常移除。
+
+            count = sum(len(book["entries"]) for book in self._lorebooks)
+            yield event.plain_result(
+                f"🐈‍⬛ 世界书导入成功！已加载 {len(self._lorebooks)} 本世界书，"
+                f"共 {count} 个有效条目。😽"
+            )
+        except Exception as exc:
+            logger.error(f"世界书插件 [导入]: {exc}", exc_info=True)
+            yield event.plain_result("🐈‍⬛ 世界书导入失败，请查看日志。原配置未修改。")
         finally:
             event.stop_event()
 
