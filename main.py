@@ -20,6 +20,7 @@ Lorebook - 世界书插件
 F(A) = A(F)
 """
 
+import base64
 import json
 import re
 from typing import Any
@@ -1158,6 +1159,34 @@ class LorebookPlugin(Star):
     @filter.command_group("lorebook", alias={"lb", "世界书"})
     def lorebook(self):
         pass
+
+    @lorebook.command("export")
+    async def lorebook_export(self, event: AstrMessageEvent):
+        """将配置面板中的完整世界书 JSON 作为 QQ 文件发送。"""
+        event.should_call_llm(True)
+        try:
+            raw_json = self.config.get("lorebooks_json", "[]")
+            if not isinstance(raw_json, str):
+                yield event.plain_result("🐈‍⬛ 世界书 JSON 配置不是文本，导出失败。")
+                return
+
+            try:
+                await event.bot.call_action(
+                    "upload_private_file",
+                    user_id=event.get_sender_id(),
+                    file="base64://" + base64.b64encode(
+                        raw_json.encode("utf-8")
+                    ).decode("ascii"),
+                    name="lorebooks.json",
+                )
+            except Exception as exc:
+                logger.error(
+                    f"世界书插件 [导出]: QQ 文件发送失败: {exc}",
+                    exc_info=True,
+                )
+                yield event.plain_result("🐈‍⬛ 世界书导出失败，请查看日志。")
+        finally:
+            event.stop_event()
 
     @lorebook.command("list")
     async def lorebook_list(self, event: AstrMessageEvent):
